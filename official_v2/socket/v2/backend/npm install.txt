@@ -1,0 +1,58 @@
+============================================================
+DG-LAB Socket V2 官方后端 - 依赖安装说明
+============================================================
+
+【路径】
+本目录: official_v2\socket\v2\backend
+
+【前置条件】
+- Node.js 16 或更高版本
+- npm 已随 Node.js 自动安装
+- 检查命令: node --version && npm --version
+
+【安装步骤】
+
+方式 1 (推荐, 通过项目根目录的 install.bat 自动安装):
+    回到项目根目录, 双击 install.bat
+    Step 5 会自动 cd 到本目录并执行 npm install
+
+方式 2 (手动单独安装):
+    1. 打开 cmd
+    2. cd /d E:\SQUAD_DGLAB\SQUAD_DGLAB\official_v2\socket\v2\backend
+    3. npm install
+    4. 等待 node_modules 创建完成 (约 1~3 分钟)
+
+【国内网络慢? 切换镜像】
+    npm config set registry https://registry.npmmirror.com
+    然后重新 npm install
+
+    恢复官方源:
+    npm config set registry https://registry.npmjs.org
+
+【验证】
+    安装成功后, 本目录会出现 node_modules 文件夹
+    包含 ws / express 等依赖
+
+【单独启动后端 (调试用)】
+    npm start
+    或
+    node app.js
+    (具体入口文件名见 package.json 的 "main" 字段)
+    监听端口默认 3000 (具体看 app.js 配置)
+
+【正常启动方式】
+    回到项目根目录, 双击 start_all.bat
+    会自动启动: 官方后端 + python_trigger + vision
+
+【常见问题】
+
+Q: npm install 卡住不动?
+A: 大概率是网络问题, 切换国内镜像源 (见上)
+
+Q: 报 "EACCES" 权限错误?
+A: 用管理员权限打开 cmd 重新跑
+
+Q: node_modules 装完了, 但 npm start 报错 "Cannot find module"?
+A: 删掉 node_modules 和 package-lock.json, 重新 npm install
+
+============================================================

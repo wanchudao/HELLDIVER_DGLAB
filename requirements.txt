@@ -1,0 +1,8 @@
+# HELLDIVER_DGLAB 依赖
+# Phase 8 (DG-LAB SOCKET v2): websocket-client 用于连接 DG-LAB 后端
+websocket-client>=1.6.0
+
+# 核心依赖
+numpy>=1.24.0
+opencv-python>=4.8.0
+mss>=9.0.0

@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Node.js
+node_modules/
+
+# Claude internal
+.claude/
+
+# Config backups
+config.ini.bak.*
+
+# OS / misc
+*.lnk
+cmd_log.txt
+Thumbs.db
