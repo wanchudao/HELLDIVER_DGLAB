@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "notes": "Selected scene/event assertions, not dense HP truth or a general accuracy benchmark. Time ranges are [start,end). Evidence: no-HUD fixture, visible treatment at 68-72s, death HUD at 89-93s, revival at 93-98s. Earlier apparent 1-pixel heals near 32.4/63/64.7s were verified as brightness threshold crossings of an unmoved edge. The pause menu is intermittent: 111s returns to battle, so only the confirmed 109-110s menu interval is asserted here.",
+  "samples": [
+    {
+      "file": "无血条画面.mp4",
+      "sha256": "f7fe04065990cfd95d7451181e2adbb11c6a7fc4e125329da6d7da8e5a081e57",
+      "frames": 2057,
+      "checks": [
+        {"name": "no HUD is never valid", "field": "valid", "value": true, "max": 0},
+        {"name": "no HUD never outputs", "field": "strength", "value": 0, "all": true},
+        {"name": "no false healing", "field": "action", "value": "heal_pulse", "max": 0}
+      ]
+    },
+    {
+      "file": "满血到死亡，和濒死回到满血.mp4",
+      "sha256": "3481f801f77a99dec8c7bb12a11d888e7c87fb18511c754571bde65a5c9eccbb",
+      "frames": 3437,
+      "checks": [
+        {"name": "exactly one death in the observed life", "field": "action", "value": "death_pulse", "min": 1, "max": 1},
+        {"name": "death at the recorded death scene", "start": 87, "end": 94, "field": "action", "value": "death_pulse", "min": 1, "max": 1},
+        {"name": "dark empty HUD remains identifiable", "start": 89, "end": 93, "field": "state", "value": "death", "min": 100},
+        {"name": "exactly treatment and revival", "field": "action", "value": "heal_pulse", "min": 2, "max": 2},
+        {"name": "no false healing before treatment", "end": 68, "field": "action", "value": "heal_pulse", "max": 0},
+        {"name": "treatment confirmation", "start": 68, "end": 74, "field": "action", "value": "heal_pulse", "min": 1, "max": 1},
+        {"name": "revival confirmation", "start": 93, "end": 98, "field": "action", "value": "heal_pulse", "min": 1, "max": 1},
+        {"name": "cumulative injury exists", "field": "action", "value": "injury_pulse", "min": 1},
+        {"name": "low HP sustained layer", "start": 68, "end": 69, "field": "low_health", "value": true, "min": 20},
+        {"name": "healing sustained layer", "start": 70, "end": 74, "field": "healing_sustain", "value": true, "min": 20},
+        {"name": "pause menu rejects HUD", "start": 109, "end": 110, "field": "valid", "value": true, "max": 0},
+        {"name": "pause menu output zero", "start": 109, "end": 110, "field": "strength", "value": 0, "all": true}
+      ]
+    }
+  ]
+}

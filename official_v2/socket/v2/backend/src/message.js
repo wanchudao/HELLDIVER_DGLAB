@@ -26,7 +26,8 @@ class MessageRouter {
     }
 
     // 所有消息必须包含 type, clientId, targetId, message
-    if (!data.type || !data.clientId || !data.message || !data.targetId) {
+    if (!data || typeof data !== 'object' || Array.isArray(data) ||
+        !data.type || !data.clientId || !data.message || !data.targetId) {
       return {
         valid: false,
         code: '404',
@@ -162,7 +163,7 @@ class MessageRouter {
    * @param {WebSocket} ws 
    * @returns {object}
    */
-  handleCustomStrength(data, ws) {
+  handleCustomStrength(data, ws, timerManager) {
     const { clientId, targetId, message } = data;
 
     // 验证配对关系
@@ -172,6 +173,11 @@ class MessageRouter {
         code: '402',
         message: '配对关系无效'
       };
+    }
+
+    // clear 必须同时取消后端发送循环和 150ms 延迟覆盖，不能只清 APP 队列。
+    if (timerManager && (message === 'clear-1' || message === 'clear-2')) {
+      timerManager.clearTimer(clientId, message === 'clear-1' ? 'A' : 'B', ws);
     }
 
     const targetClient = this.connectionManager.getClient(targetId);
@@ -220,11 +226,11 @@ class MessageRouter {
     }
 
     // 必须指定通道
-    if (!channel) {
+    if (channel !== 'A' && channel !== 'B') {
       return {
         success: false,
         code: '406',
-        message: 'channel is empty',
+        message: 'channel must be A or B',
       };
     }
 
@@ -238,9 +244,13 @@ class MessageRouter {
     }
 
     // 计算发送参数
-    const sendTime = time || config.message.defaultPunishmentDuration;
+    const sendTime = time === undefined ? config.message.defaultPunishmentDuration : Number(time);
     const totalSends = config.message.defaultPunishmentTime * sendTime;
     const timeSpace = 1000 / config.message.defaultPunishmentTime;
+    if (!Number.isFinite(totalSends) || totalSends <= 0 ||
+        !Number.isFinite(timeSpace) || timeSpace <= 0) {
+      return { success: false, code: '406', message: 'invalid pulse duration or rate' };
+    }
 
     const pulseMessage = {
       type: 'msg',

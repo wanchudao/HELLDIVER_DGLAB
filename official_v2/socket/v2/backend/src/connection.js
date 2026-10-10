@@ -160,6 +160,7 @@ class ConnectionManager {
     const pairId = this.getPair(clientId);
     if (pairId) {
       logger.info(`[${clientId}] 断开，关联配对：${pairId}`);
+      this.stopPairOutput(clientId);
       
       // 通知配对的另一端
       const pairedClient = this.connections.get(pairId);
@@ -200,6 +201,27 @@ class ConnectionManager {
     logger.info(`[断开] ${clientId}，剩余连接数：${this.connections.size}`);
     
     return { success: true, code: '200' };
+  }
+
+  /** 连接尚可用时，先清 APP 两路队列并归零，再通知断开/关闭连接。 */
+  stopPairOutput(clientId) {
+    const webClientId = this.reversePairings.get(clientId) || clientId;
+    const appClientId = this.pairings.get(webClientId);
+    const app = this.connections.get(appClientId);
+    if (!app || !app.ws || app.ws.readyState !== 1) {
+      return;
+    }
+    for (const channel of [1, 2]) {
+      for (const message of [`clear-${channel}`, `strength-${channel}+2+0`]) {
+        try {
+          app.ws.send(JSON.stringify({
+            type: 'msg', clientId: webClientId, targetId: appClientId, message
+          }));
+        } catch (err) {
+          logger.error(`断开前归零失败：${err.message}`);
+        }
+      }
+    }
   }
   
   /**

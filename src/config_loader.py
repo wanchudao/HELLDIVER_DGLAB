@@ -1,5 +1,6 @@
 """config_loader.py — 从 config.ini 加载配置为嵌套 dict。"""
 import configparser
+import logging
 from pathlib import Path
 from typing import Union
 
@@ -15,9 +16,17 @@ def load_config(config_path: Union[str, Path, None] = None) -> dict:
     """
     if config_path is None:
         config_path = Path(__file__).resolve().parent.parent / "config.ini"
+        if not config_path.is_file():
+            config_path = config_path.with_name("config.example.ini")
+            logging.getLogger(__name__).warning(
+                "config.ini missing; using safe mock defaults from %s. Calibrate before real output.",
+                config_path,
+            )
 
     cp = configparser.ConfigParser()
-    cp.read(str(config_path), encoding="utf-8")
+    # Explicit paths must not silently turn into {}, causing a later KeyError.
+    with Path(config_path).open(encoding="utf-8-sig") as stream:
+        cp.read_file(stream)
 
     config = {}
     for section in cp.sections():

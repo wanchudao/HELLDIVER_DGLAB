@@ -8,10 +8,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config_loader import load_config
 from src.health_detector import HealthDetector
+import pytest
 
 
 def _make_detector():
-    config = load_config(str(PROJECT_ROOT / "config.ini"))
+    config = load_config(PROJECT_ROOT / "config.example.ini")
     return HealthDetector(config)
 
 
@@ -66,3 +67,29 @@ class TestComputeFilledScores:
         scores = det._compute_filled_scores(mean, std)
         assert scores[0] > scores[1] > scores[2]
         assert scores[4] > scores[3] > scores[2]
+
+
+@pytest.mark.parametrize("before,after", [
+    ([.953, .767, .355, .219, .218], [.948, .784, .403, .259, .238]),
+    ([.375, .425, .372, .209, .131], [.376, .430, .382, .211, .129]),
+    ([.378, .426, .373, .221, .139], [.371, .426, .382, .224, .142]),
+])
+def test_fixed_edge_brightness_changes_do_not_move_health(before, after):
+    """Observed MP4 edge profiles: threshold crossing is not a filled-pixel move."""
+    detector = _make_detector()
+    width = detector.bar_max_x - detector.bar_min_x
+    profiles = [np.array([.6] * 40 + edge + [.1] * (width - 45))
+                for edge in (before, after)]
+    assert detector._find_boundary(profiles[0]) == detector._find_boundary(profiles[1])
+
+
+@pytest.mark.parametrize("pixels", [1, 2, 40, 80, 178])
+def test_one_pixel_edge_translation_is_not_suppressed(pixels):
+    detector = _make_detector()
+    width = detector.bar_max_x - detector.bar_min_x
+    def profile(filled):
+        return detector._smooth_scores(np.array([.9] * filled + [.1] * (width - filled)))
+    left_x, left_hp = detector._find_boundary(profile(pixels))
+    right_x, right_hp = detector._find_boundary(profile(pixels + 1))
+    assert right_x == left_x + 1
+    assert right_hp - left_hp == pytest.approx(1 / width)

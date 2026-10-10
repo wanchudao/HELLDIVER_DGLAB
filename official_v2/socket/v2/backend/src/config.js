@@ -3,7 +3,7 @@ require('dotenv').config();
 module.exports = {
   // 服务器配置
   server: {
-    port: parseInt(process.env.PORT) || 9999,
+    port: process.env.PORT === '0' ? 0 : (parseInt(process.env.PORT) || 9999),
     heartbeatInterval: parseInt(process.env.HEARTBEAT_INTERVAL) || 30000,
   },
 

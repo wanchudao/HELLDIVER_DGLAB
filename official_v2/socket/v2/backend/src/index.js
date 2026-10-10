@@ -18,6 +18,16 @@ logger.info(`WebSocket 服务器启动，监听端口：${config.server.port}`);
 // 心跳定时器
 let heartbeatInterval = null;
 
+wss.on('listening', () => {
+  if (process.env.HELLDIVER_MANAGED === '1') {
+    console.log(`HD_READY=${wss.address().port}`);
+  }
+});
+wss.on('error', (error) => {
+  logger.error(`服务器监听失败: ${error.message}`);
+  if (process.env.HELLDIVER_MANAGED === '1') process.exit(1);
+});
+
 wss.on('connection', (ws, req) => {
   // 生成唯一 ID
   const clientId = uuidv4();
@@ -123,6 +133,10 @@ wss.on('connection', (ws, req) => {
   ws.on('error', (error) => {
     logger.error(`WebSocket 异常 [${clientId}]: ${error.message}`);
 
+    // 出错连接不再保留任何正在发送或延迟覆盖的任务。
+    timerManager.clearClientTimers(clientId);
+    connectionManager.stopPairOutput(clientId);
+
     // 查找配对的另一端并通知
     const pairId = connectionManager.getPair(clientId);
     if (pairId) {
@@ -141,6 +155,7 @@ wss.on('connection', (ws, req) => {
         }
       }
     }
+    connectionManager.disconnect(clientId);
   });
 
   // 启动全局心跳定时器（仅启动一次）
@@ -185,7 +200,7 @@ function handleStrengthAdjust(data, ws) {
  * 处理指定强度（type 4）
  */
 function handleCustomStrength(data, ws) {
-  const result = messageRouter.handleCustomStrength(data, ws);
+  const result = messageRouter.handleCustomStrength(data, ws, timerManager);
 
   if (!result.success) {
     const errorResponse = {
@@ -280,6 +295,8 @@ function gracefulShutdown(signal) {
 
   // 清理所有定时器
   timerManager.cleanupAll();
+  // 已发完波形但仍保留强度的配对也需要归零。
+  connectionManager.forEachClient((clientId) => connectionManager.stopPairOutput(clientId));
 
   // 清除心跳定时器
   if (heartbeatInterval) {
@@ -316,3 +333,5 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 logger.info('服务器启动完成');
+
+module.exports = { gracefulShutdown };

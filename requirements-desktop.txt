@@ -1,0 +1,7 @@
+# Complete main desktop edition; DGHub/dxcam are not required.
+numpy==2.5.2
+opencv-python==5.0.0.93
+mss==10.2.0
+websocket-client==1.9.1
+qrcode==8.2
+Pillow==12.3.0

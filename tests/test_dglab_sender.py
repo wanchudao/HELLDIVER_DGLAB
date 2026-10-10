@@ -1,6 +1,7 @@
 """test_dglab_sender.py — 模块级 API + 内部函数测试。无需真实 DG-LAB 后端。"""
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -28,13 +29,14 @@ class TestActionProfiles:
 
 class TestGetLanIp:
     def test_returns_string(self):
-        ip = _get_lan_ip()
-        assert isinstance(ip, str) and len(ip) > 0
+        with patch("src.dglab_sender.socket.socket") as socket_type:
+            sock = socket_type.return_value.__enter__.return_value
+            sock.getsockname.return_value = ("192.0.2.10", 12345)
+            assert _get_lan_ip() == "192.0.2.10"
 
     def test_has_dots_or_localhost(self):
-        ip = _get_lan_ip()
-        parts = ip.split(".")
-        assert len(parts) == 4 or ip == "127.0.0.1"
+        with patch("src.dglab_sender.socket.socket", side_effect=OSError("offline")):
+            assert _get_lan_ip() == "127.0.0.1"
 
 
 class TestWsClientInit:

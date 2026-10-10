@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.venv/
 
 # Node.js
 node_modules/
@@ -12,8 +13,39 @@ node_modules/
 
 # Config backups
 config.ini.bak.*
+feedback_settings.ini
+.feedback-*.tmp
 
 # OS / misc
 *.lnk
 cmd_log.txt
 Thumbs.db
+
+# Local builds and publication assets (binaries belong in GitHub Releases)
+build/
+release/
+backups/
+dist/
+*.zip
+*.exe
+*.EXE
+*.log
+*.jsonl
+debug/
+sessions/
+**/sessions/
+**/build/
+**/dist/
+**/debug/
+config.ini
+hud_settings.ini
+ui_settings.ini
+.hud-*.tmp
+.ui-*.tmp
+.env
+.env.*
+!.env.example
+screenshots/video/
+screenshots/20260913/
+screenshots/v03_reports/
+**/v03_video_reports/

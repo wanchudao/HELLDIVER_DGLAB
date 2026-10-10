@@ -9,6 +9,7 @@ runner_mock.py — Phase 6 Mock 实时入口。
 """
 
 import logging
+import argparse
 import re
 import sys
 import time
@@ -26,8 +27,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ── 可调参数 ──
 IMAGE_DIR = PROJECT_ROOT / "debug" / "all_samples"
 FRAME_INTERVAL = 0.5  # 帧间隔秒数
-LOOP = True            # 播完是否循环 (False = 只播一轮)
-SHOW_PREVIEW = True   # 显示 debug overlay 窗口
+LOOP = False           # 默认离线单轮，--loop 时重复
+SHOW_PREVIEW = False  # --preview 时显示 debug overlay 窗口
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
@@ -54,20 +55,28 @@ def _collect_images(image_dir: Path) -> list[tuple[str, list[Path]]]:
     return sorted(paths_by_group.items())
 
 
-def main():
+def main(argv=None):
     from src.config_loader import load_config
-    from src.roi_locator import RoiLocator
-    from src.health_detector import HealthDetector
-    from src.effect_detector import EffectDetector
-    from src.state_machine import StateMachine
     from src.trigger import TriggerDispatch
+    from src.vision_pipeline import VisionPipeline
 
-    config = load_config(str(PROJECT_ROOT / "config.ini"))
+    parser = argparse.ArgumentParser(description="Offline replay; always mock, never hardware")
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--image-dir", type=Path, default=IMAGE_DIR)
+    parser.add_argument("--preview", action="store_true", default=SHOW_PREVIEW)
+    parser.add_argument("--loop", action="store_true", default=LOOP)
+    parser.add_argument("--interval", type=float, default=FRAME_INTERVAL)
+    args = parser.parse_args(argv)
+    if args.interval < 0:
+        parser.error("--interval must be non-negative")
+    config = load_config(args.config)
+    config.setdefault("trigger", {})["sender_mode"] = "mock"
 
-    roi_locator = RoiLocator(config)
-    health_detector = HealthDetector(config)
-    effect_detector = EffectDetector(config)
-    state_machine = StateMachine(config)
+    pipeline = VisionPipeline(config)
+    groups = _collect_images(args.image_dir)
+    if not groups:
+        print(f"[runner_mock] no images found in {args.image_dir}")
+        return
     trigger = None
     try:
         trigger = TriggerDispatch(config)
@@ -76,14 +85,9 @@ def main():
         print("[runner_mock] 将继续运行（仅终端输出）。")
         trigger = None
 
-    groups = _collect_images(IMAGE_DIR)
-    if not groups:
-        print(f"[runner_mock] no images found in {IMAGE_DIR}")
-        return
-
     total_images = sum(len(paths) for _, paths in groups)
-    print(f"[runner_mock] {len(groups)} groups, {total_images} images from {IMAGE_DIR}")
-    print(f"[runner_mock] FRAME_INTERVAL={FRAME_INTERVAL}s  SHOW_PREVIEW={SHOW_PREVIEW}")
+    print(f"[runner_mock] {len(groups)} groups, {total_images} images from {args.image_dir}")
+    print(f"[runner_mock] FRAME_INTERVAL={args.interval}s  SHOW_PREVIEW={args.preview}")
     print(f"[runner_mock] Ctrl+C to stop\n")
 
     # ── 统计 ──
@@ -96,12 +100,13 @@ def main():
         while True:  # 循环播放 (Ctrl+C 退出)
             for group_name, paths in groups:
                 # ── 每组之间重置状态机 + EMA ──
-                state_machine.reset()
-                health_detector.reset_ema()
+                pipeline.reset()
+                if trigger is not None:
+                    trigger.reset("replay_group")
                 prev_raw_state = None  # 追踪组内状态转换
 
                 for i, path in enumerate(paths):
-                    t0 = time.time()
+                    t0 = time.monotonic()
 
                     frame = cv2.imread(str(path))
                     if frame is None:
@@ -110,23 +115,12 @@ def main():
 
                     # ── 完整管线 ──
                     try:
-                        roi_result = roi_locator.locate(frame)
-                        health_result = health_detector.detect(roi_result.inner_img)
-                        effect_result = effect_detector.detect(
-                            frame, health_raw=health_result.health_raw
-                        )
-                        result = state_machine.update(
-                            health_raw=health_result.health_raw,
-                            health_stable=health_result.health_stable,
-                            red_score=effect_result.red_score,
-                            cyan_score=effect_result.cyan_score,
-                            death_score=effect_result.death_score,
-                            anchor_score=roi_result.anchor_score,
-                            confidence=health_result.confidence,
-                            valid=roi_result.valid,
-                        )
+                        result, roi_result, health_result = pipeline.process(frame)
                     except Exception:
                         logger.exception("pipeline error: %s", path.name)
+                        pipeline.reset()
+                        if trigger is not None:
+                            trigger.reset("replay_error")
                         continue
 
                     # ── 输出 ──
@@ -141,7 +135,7 @@ def main():
                     )
 
                     # ── 触发设备 ──
-                    if trigger is not None and result.event != "none":
+                    if trigger is not None:
                         trigger.dispatch(result)
 
                     # ── 状态转换记录 ──
@@ -154,7 +148,7 @@ def main():
                     prev_raw_state = raw_state
 
                     # ── 调试覆盖 ──
-                    if SHOW_PREVIEW:
+                    if args.preview:
                         from src.debug_overlay import draw_overlay
 
                         outer_coords = roi_result.outer_coords
@@ -172,11 +166,11 @@ def main():
                             raise KeyboardInterrupt
 
                     # ── 帧间隔 (扣除处理时间) ──
-                    elapsed = time.time() - t0
-                    time.sleep(max(0, FRAME_INTERVAL - elapsed))
+                    elapsed = time.monotonic() - t0
+                    time.sleep(max(0, args.interval - elapsed))
 
             # 一轮播完
-            if not LOOP:
+            if not args.loop:
                 break
             print(f"\n[runner_mock] === loop complete, restarting (Ctrl+C to stop) ===\n")
 
@@ -185,7 +179,7 @@ def main():
     finally:
         if trigger is not None:
             trigger.safe_stop()
-        if SHOW_PREVIEW:
+        if args.preview:
             cv2.destroyAllWindows()
 
         # ── 退出摘要 ──
