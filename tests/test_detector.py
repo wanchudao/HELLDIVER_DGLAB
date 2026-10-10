@@ -16,10 +16,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config_loader import load_config
-from src.roi_locator import RoiLocator
-from src.health_detector import HealthDetector
-from src.effect_detector import EffectDetector
-from src.state_machine import StateMachine, DetectionResult
+from src.state_machine import DetectionResult
+from src.vision_pipeline import VisionPipeline
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -49,12 +47,9 @@ class EvaluatedImage:
         return self.predicted_state == "unknown"
 
 
-def test_single_image(
+def _evaluate_single_image(
     image_path: str,
-    roi_locator: RoiLocator,
-    health_detector: HealthDetector,
-    effect_detector: EffectDetector,
-    state_machine: StateMachine,
+    pipeline: VisionPipeline,
 ) -> DetectionResult:
     """测试单张截图。"""
     frame = cv2.imread(image_path)
@@ -62,35 +57,17 @@ def test_single_image(
         logger.error("cannot read image: %s", image_path)
         return DetectionResult(state="error", confidence=0.0)
 
-    # ROI 定位
-    roi_result = roi_locator.locate(frame)
-
-    # 血量检测
-    health_result = health_detector.detect(roi_result.inner_img)
-
-    # 特效检测
-    effect_result = effect_detector.detect(frame, health_raw=health_result.health_raw)
-
-    # 状态机
-    result = state_machine.update(
-        health_raw=health_result.health_raw,
-        health_stable=health_result.health_stable,
-        red_score=effect_result.red_score,
-        cyan_score=effect_result.cyan_score,
-        death_score=effect_result.death_score,
-        anchor_score=roi_result.anchor_score,
-        confidence=health_result.confidence,
-        valid=roi_result.valid,
-    )
+    # 与实时和 Mock 共用门控，不能给离线评估另开宽松路径。
+    result, roi_result, health_result = pipeline.process(frame)
 
     result.debug = {
         "image": Path(image_path).name,
         "anchor_score": round(roi_result.anchor_score, 3),
         "health_raw": round(health_result.health_raw, 3),
         "health_stable": round(health_result.health_stable, 3),
-        "red_score": round(effect_result.red_score, 3),
-        "cyan_score": round(effect_result.cyan_score, 3),
-        "death_score": round(effect_result.death_score, 3),
+        "red_score": round(result.red_score, 3),
+        "cyan_score": round(result.cyan_score, 3),
+        "death_score": round(result.death_score, 3),
         "confidence": round(health_result.confidence, 3),
         "event": result.event,
         "fill_boundary_x": health_result.fill_boundary_x,
@@ -131,13 +108,10 @@ def collect_eval_targets(screenshots_dir: Path) -> list[tuple[Path, str, str]]:
     return targets
 
 
-def test_directory(
+def _evaluate_directory(
     dir_path: str,
     expected_state: str,
-    roi_locator: RoiLocator,
-    health_detector: HealthDetector,
-    effect_detector: EffectDetector,
-    state_machine: StateMachine,
+    pipeline: VisionPipeline,
 ) -> tuple[list[EvaluatedImage], list[Path]]:
     """测试目录下所有原始截图，并返回被过滤的派生图。"""
     evaluated: list[EvaluatedImage] = []
@@ -146,8 +120,8 @@ def test_directory(
     skipped_files = [f for f in image_files if not is_original_screenshot(f)]
 
     for img_path in original_files:
-        result = test_single_image(
-            str(img_path), roi_locator, health_detector, effect_detector, state_machine
+        result = _evaluate_single_image(
+            str(img_path), pipeline
         )
         record = EvaluatedImage(path=img_path, expected_state=expected_state, result=result)
         evaluated.append(record)
@@ -234,10 +208,6 @@ def main():
     """主函数：遍历 screenshots/ 下所有子目录并测试。"""
     config = load_config()
 
-    roi_locator = RoiLocator(config)
-    health_detector = HealthDetector(config)
-    effect_detector = EffectDetector(config)
-
     screenshots_dir = PROJECT_ROOT / "screenshots"
     if not screenshots_dir.exists():
         print(f"screenshots directory not found: {screenshots_dir}")
@@ -268,11 +238,10 @@ def main():
         print(f"{'='*60}")
 
         # 每个目录使用独立状态机，避免跨目录污染。
-        state_machine = StateMachine(config)
-        health_detector.reset_ema()
+        pipeline = VisionPipeline(config)
 
-        records, skipped_files = test_directory(
-            str(subdir), expected_state, roi_locator, health_detector, effect_detector, state_machine
+        records, skipped_files = _evaluate_directory(
+            str(subdir), expected_state, pipeline
         )
         all_records.extend(records)
         skipped_total += len(skipped_files)

@@ -2,7 +2,8 @@ const logger = require('./logger');
 
 class TimerManager {
   constructor() {
-    // 存储格式：clientId-channel -> { timerId, remaining, message, targetWs, channel, sourceWs }
+    // 存储格式：clientId-channel -> { timerId, delayId, remaining, message, targetWs, channel, sourceWs }
+    // 延迟覆盖也必须在 Map 中登记；clear/断线不能留下尚未启动的孤儿任务。
     this.timers = new Map();
   }
   
@@ -41,8 +42,19 @@ class TimerManager {
         logger.error(`发送清除指令失败：${err.message}`);
       }
       
-      // 延迟 150ms 再发送新消息，避免队列指令晚于波形数据执行
-      setTimeout(() => {
+      // 延迟 150ms 再发送新消息，避免队列指令晚于波形数据执行。
+      // 占位对象即本次任务 token；新消息/clear 替换它后，迟到回调无权再发送。
+      const pendingTask = {
+        clientId, channel, targetWs, sourceWs,
+        message: JSON.parse(JSON.stringify(message)),
+        remaining: totalSends, timerId: null, delayId: null,
+        startedAt: new Date()
+      };
+      this.timers.set(timerKey, pendingTask);
+      pendingTask.delayId = setTimeout(() => {
+        if (this.timers.get(timerKey) !== pendingTask) {
+          return;
+        }
         this._startSending(clientId, channel, targetWs, message, totalSends, timeSpace, sourceWs);
       }, 150);
       
@@ -84,8 +96,10 @@ class TimerManager {
       remaining: totalSends,
       timeSpace,
       timerId: null,
+      delayId: null,
       startedAt: new Date()
     };
+    this.timers.set(timerKey, timerTask);
     
     // 立即发送第一条消息
     this._safeSend(targetWs, message);
@@ -96,6 +110,11 @@ class TimerManager {
     // 如果还有剩余次数，启动定时器
     if (timerTask.remaining > 0) {
       const timerId = setInterval(() => {
+        // clearInterval 不能撤回已经入队的回调，必须再验证任务归属。
+        if (this.timers.get(timerKey) !== timerTask) {
+          clearInterval(timerId);
+          return;
+        }
         // 检查目标连接是否还存在
         if (targetWs.readyState !== 1) { // 1 = OPEN
           logger.warn(`[${timerKey}] 目标连接已断开，停止发送`);
@@ -131,6 +150,7 @@ class TimerManager {
       timerTask.timerId = timerId;
       this.timers.set(timerKey, timerTask);
     } else {
+      this.timers.delete(timerKey);
       logger.info(`[${timerKey}] 消息已发送完成（仅 1 条）`);
       
       // 通知客户端发送完毕
@@ -160,6 +180,11 @@ class TimerManager {
     const timerTask = this.timers.get(timerKey);
     
     if (timerTask) {
+      // 先作废任务，再发清除消息；即使旧回调已入队也不能恢复发送。
+      this.timers.delete(timerKey);
+      if (timerTask.delayId !== null && timerTask.delayId !== undefined) {
+        clearTimeout(timerTask.delayId);
+      }
       // 先发送清除指令
       const clearMessage = {
         type: 'msg',
@@ -174,7 +199,6 @@ class TimerManager {
         clearInterval(timerTask.timerId);
       }
       
-      this.timers.delete(timerKey);
       logger.debug(`[${timerKey}] 定时器已清除`);
     }
   }
@@ -187,17 +211,17 @@ class TimerManager {
     const keysToDelete = [];
     
     for (const [key, task] of this.timers.entries()) {
-      if (key.startsWith(`${clientId}-`)) {
+      if (task.clientId === clientId || task.message.targetId === clientId) {
         keysToDelete.push(key);
       }
     }
     
     keysToDelete.forEach(key => {
       const task = this.timers.get(key);
-      if (task && task.timerId) {
-        clearInterval(task.timerId);
+      if (task) {
+        this.clearTimer(task.clientId, task.channel, task.sourceWs);
+        this._zeroTask(task);
       }
-      this.timers.delete(key);
     });
     
     logger.info(`[${clientId}] 清除了 ${keysToDelete.length} 个定时器`);
@@ -217,6 +241,14 @@ class TimerManager {
         logger.error(`发送消息失败：${err.message}`);
       }
     }
+  }
+
+  /** 断线/退出时尽力归零；普通覆盖 clear 不归零，以免抵消新动作的强度。 */
+  _zeroTask(task) {
+    this._safeSend(task.targetWs, {
+      type: 'msg', clientId: task.clientId, targetId: task.message.targetId,
+      message: `strength-${task.channel === 'A' ? '1' : '2'}+2+0`
+    });
   }
   
   /**
@@ -240,10 +272,9 @@ class TimerManager {
    * 清理所有定时器（用于服务关闭）
    */
   cleanupAll() {
-    for (const [key, task] of this.timers.entries()) {
-      if (task.timerId) {
-        clearInterval(task.timerId);
-      }
+    for (const task of Array.from(this.timers.values())) {
+      this.clearTimer(task.clientId, task.channel, task.sourceWs);
+      this._zeroTask(task);
     }
     this.timers.clear();
     logger.info('所有定时器已清理');

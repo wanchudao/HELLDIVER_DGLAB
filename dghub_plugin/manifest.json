@@ -1,0 +1,10 @@
+{
+  "id": "helldiver_dglab",
+  "name": "HELLDIVER_DGLAB — Offline Mock",
+  "version": "0.5.0-offline",
+  "sdk": "1",
+  "author": "HELLDIVER_DGLAB team",
+  "description": "共享主版本视觉/Trigger/Mixer 的本地 Mock 验证版，仅模拟 A 通道，B 预留。禁用 DGHub 连接、注册与设备输出；默认启动拒绝运行，显式 --offline 打开本地暂停面板，--self-check 执行无网络自检。不支持导入后连接真机。",
+  "entry": "helldiver_dglab.exe",
+  "config_schema": []
+}

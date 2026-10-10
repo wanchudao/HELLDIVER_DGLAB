@@ -1,0 +1,95 @@
+{
+  "source": "user_original_attachments",
+  "recorded_by_user": "2026-10-02",
+  "archived": "2026-10-02",
+  "samples": [
+    {
+      "file": "hud_075_full.jpg",
+      "sha256": "f71f4c46e58a0c81389f2a455662ad90c28512235236334e492febbc4fe166d7",
+      "bytes": 483794,
+      "scale_percent": 75,
+      "width": 1920,
+      "height": 1080,
+      "role": "original_full_health",
+      "original_attachment": "codex-clipboard-ed7c7725-e8a0-4e40-a905-1f5c29f08568.jpg",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    },
+    {
+      "file": "hud_080_full.jpg",
+      "sha256": "71c9d7ba1bfa7ee21bb02cc4d31f15ef6a4a266cf8ee371e4aeec61d27a51540",
+      "bytes": 470862,
+      "scale_percent": 80,
+      "width": 1920,
+      "height": 1080,
+      "role": "original_full_health",
+      "original_attachment": "codex-clipboard-b814e7c3-187d-4698-a33b-a6899f06467d.jpg",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    },
+    {
+      "file": "hud_085_full.jpg",
+      "sha256": "56ebc8e10a5553453f02ca39496d831e193a3027013c50495c2bb87f469a5d0a",
+      "bytes": 532692,
+      "scale_percent": 85,
+      "width": 1920,
+      "height": 1080,
+      "role": "original_full_health",
+      "original_attachment": "codex-clipboard-7dee2805-9569-4afe-b409-641f27b2d64d.jpg",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    },
+    {
+      "file": "hud_090_full.jpg",
+      "sha256": "4a25f1bf94455baa039fc6b231bfe8ffdbeffd27bdc10eb9205687ad3c5d24c6",
+      "bytes": 586757,
+      "scale_percent": 90,
+      "width": 1920,
+      "height": 1080,
+      "role": "original_full_health",
+      "original_attachment": "codex-clipboard-efedd595-355b-4d49-8fee-eba9fcd87444.jpg",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    },
+    {
+      "file": "hud_095_full.jpg",
+      "sha256": "fcc31aa8f3ae1bd63a2eca2954e4a6f760c3f5d2aca1f60234aef2f5ca7d3fb4",
+      "bytes": 523109,
+      "scale_percent": 95,
+      "width": 1920,
+      "height": 1080,
+      "role": "original_full_health",
+      "original_attachment": "codex-clipboard-f9252b8c-701a-47c6-bd3a-6c9731cda77a.jpg",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    },
+    {
+      "file": "hud_100_aux_1919x1079.png",
+      "sha256": "d0db38f833a3006522c5939e2277e21bd53d412faee59b7d59094333c20ed6de",
+      "bytes": 5017693,
+      "scale_percent": 100,
+      "width": 1919,
+      "height": 1079,
+      "role": "auxiliary_size_mismatch",
+      "original_attachment": "codex-clipboard-f61e6fc1-d94f-4329-b48c-9d54301dc28b.png",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    },
+    {
+      "file": "hud_100_full.jpg",
+      "sha256": "a8884bb4e13004a3ba6fd6bd03d652c94c4691f76e64b742fb9107e6c913a84f",
+      "bytes": 507973,
+      "scale_percent": 100,
+      "width": 1920,
+      "height": 1080,
+      "role": "original_full_health",
+      "original_attachment": "codex-clipboard-6340d348-2acd-4360-bdc9-eca348237efd.jpg",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    },
+    {
+      "file": "hud_125_full.jpg",
+      "sha256": "7ec54bc3b9b6866e67617e6a8760c8730de560a09285b0e74f245e5b5e8f6093",
+      "bytes": 646863,
+      "scale_percent": 125,
+      "width": 1920,
+      "height": 1080,
+      "role": "original_full_health",
+      "original_attachment": "codex-clipboard-9d01ae86-195c-463f-97b0-8f3f6d2fd12d.jpg",
+      "scale_confirmation": "user_confirmed_0.75_to_1.00_in_0.05_steps_and_maximum_1.25"
+    }
+  ]
+}

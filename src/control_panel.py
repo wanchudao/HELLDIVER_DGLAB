@@ -1,20 +1,102 @@
-"""control_panel.py — 迷你控制面板窗口渲染。
+"""Interactive always-on-top safety panel for the real-time runner.
 
-独立于 overlay 模块，始终显示（不依赖 --preview 参数）。
-纯英文（OpenCV 默认字体不兼容中文）。
+The panel deliberately keeps all text in ASCII because OpenCV's built-in font
+does not render Chinese reliably. Rendering and click intent are kept here;
+the runner remains the only owner of the armed/paused state and device stop.
 """
 from typing import Optional
-import numpy as np
+import logging
+import sys
+
 import cv2
+import numpy as np
 
-PANEL_W, PANEL_H = 260, 150
-PANEL_NAME = "Control Panel"
 
-WHITE  = (255, 255, 255)
-GRAY   = (160, 160, 160)
-GREEN  = (0, 255, 0)
-RED    = (0, 0, 255)
-YELLOW = (0, 255, 255)
+PANEL_W, PANEL_H = 380, 250
+PANEL_NAME = "HELLDIVER DGLAB - Safety Control"
+TOGGLE_BUTTON = (20, 88, PANEL_W - 20, 145)
+ISLAND_W, ISLAND_H = 336, 56
+ISLAND_BUTTON = (20, 218, 135, 242)
+ISLAND_TOGGLE = (222, 9, 272, 47)
+ISLAND_EXPAND = (282, 9, 324, 47)
+
+WHITE = (245, 245, 245)
+MUTED = (155, 165, 175)
+BACKGROUND = (22, 25, 30)
+PANEL_EDGE = (70, 78, 88)
+SAFE = (62, 170, 92)
+SAFE_DARK = (30, 82, 48)
+ARMED = (45, 55, 225)
+ARMED_DARK = (28, 32, 115)
+BLUE = (210, 125, 45)
+BLUE_DARK = (95, 58, 25)
+
+
+def _centered_text(image, text, y, scale, color, thickness=1):
+    size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)[0]
+    x = max(6, (image.shape[1] - size[0]) // 2)
+    cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                scale, color, thickness, cv2.LINE_AA)
+
+
+def point_in_toggle_button(x: int, y: int) -> bool:
+    """Return whether a panel-space point is inside the large safety button."""
+    x1, y1, x2, y2 = TOGGLE_BUTTON
+    return x1 <= x <= x2 and y1 <= y <= y2
+
+
+def _inside(rect, x, y):
+    x1, y1, x2, y2 = rect
+    return x1 <= x <= x2 and y1 <= y <= y2
+
+
+class PanelController:
+    """Turns OpenCV mouse callbacks into a one-shot toggle request."""
+
+    def __init__(self):
+        self._toggle_requested = False
+        self._button_pressed = False
+        self.compact = False
+        self._layout_pressed = False
+        self._layout_requested = False
+
+    def on_mouse(self, event, x, y, flags=None, param=None):
+        toggle = ISLAND_TOGGLE if self.compact else TOGGLE_BUTTON
+        layout = ISLAND_EXPAND if self.compact else ISLAND_BUTTON
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self._button_pressed = _inside(toggle, x, y)
+            self._layout_pressed = _inside(layout, x, y)
+        elif event == cv2.EVENT_MOUSEMOVE:
+            # Once dragged out, returning to the button must not revive a click.
+            self._button_pressed &= _inside(toggle, x, y)
+            self._layout_pressed &= _inside(layout, x, y)
+        elif event == cv2.EVENT_LBUTTONUP:
+            if self._button_pressed and _inside(toggle, x, y):
+                self._toggle_requested = True
+            if self._layout_pressed and _inside(layout, x, y):
+                self._layout_requested = True
+            self._button_pressed = False
+            self._layout_pressed = False
+
+    def cancel_pending(self):
+        """Discard clicks and held gestures when their displayed action changes."""
+        self._toggle_requested = False
+        self._button_pressed = False
+        self._layout_pressed = False
+        self._layout_requested = False
+
+    def consume_layout(self) -> bool:
+        if not self._layout_requested:
+            return False
+        self.compact = not self.compact
+        # A button release must never be replayed in the other layout.
+        self.cancel_pending()
+        return True
+
+    def consume_toggle(self) -> bool:
+        requested = self._toggle_requested
+        self._toggle_requested = False
+        return requested
 
 
 def draw_control_panel(
@@ -24,85 +106,182 @@ def draw_control_panel(
     cur_fps: float = 0.0,
     paused: bool = True,
     paused_fps: Optional[float] = None,
+    output_mode: str = "MONITOR",
+    stop_reason: str = "Startup safety lock",
+    compact: bool = False,
+    valid: bool = True,
+    theme: str = "legacy",
 ) -> np.ndarray:
-    """渲染控制面板小窗。返回 (PANEL_H, PANEL_W, 3) BGR 图像。
+    """Render the complete safety control panel as a BGR image."""
+    if compact:
+        return draw_island(paused=paused, health=health_stable, valid=valid, theme=theme)
+    panel = np.full((PANEL_H, PANEL_W, 3), BACKGROUND, dtype=np.uint8)
+    cv2.rectangle(panel, (0, 0), (PANEL_W - 1, PANEL_H - 1), PANEL_EDGE, 1)
 
-    Args:
-        paused_fps: 暂停前的最后 FPS 值（暂停时冻结显示）；None 表示实时 fps
-    """
-    panel = np.zeros((PANEL_H, PANEL_W, 3), dtype=np.uint8)
-    y = 18
+    cv2.putText(panel, "HELLDIVER DGLAB", (16, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, WHITE, 1, cv2.LINE_AA)
+    mode = str(output_mode).upper()[:12]
+    mode_size = cv2.getTextSize(mode, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)[0]
+    cv2.putText(panel, mode, (PANEL_W - mode_size[0] - 16, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                ARMED if mode == "HARDWARE" else MUTED, 1, cv2.LINE_AA)
 
-    # 标题
-    cv2.putText(panel, "HELLDIVER_DGLAB v0.1", (6, y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, WHITE, 1)
-    y += 18
+    status_color = SAFE_DARK if paused else ARMED_DARK
+    status_edge = SAFE if paused else ARMED
+    cv2.rectangle(panel, (12, 36), (PANEL_W - 12, 76), status_color, -1)
+    cv2.rectangle(panel, (12, 36), (PANEL_W - 12, 76), status_edge, 2)
+    _centered_text(
+        panel,
+        "SAFE - OUTPUT LOCKED" if paused else "ARMED - BATTLE MODE",
+        63, 0.62, WHITE, 2,
+    )
 
-    # 运行状态
+    x1, y1, x2, y2 = TOGGLE_BUTTON
+    button_color = BLUE_DARK if paused else ARMED_DARK
+    button_edge = BLUE if paused else ARMED
+    cv2.rectangle(panel, (x1, y1), (x2, y2), button_color, -1)
+    cv2.rectangle(panel, (x1, y1), (x2, y2), button_edge, 2)
+    _centered_text(
+        panel,
+        "ARM FOR BATTLE  [F8]" if paused else "STOP OUTPUT NOW  [F8]",
+        124, 0.56, WHITE, 2,
+    )
+
     if paused:
-        cv2.putText(panel, "[PAUSED] Ship mode", (6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, GRAY, 1)
-        y += 22
-        cv2.putText(panel, "Press [P] to start", (6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, GRAY, 1)
-        y += 22
+        reason = str(stop_reason or "Manual safety lock")[:42]
+        cv2.putText(panel, f"Reason: {reason}", (20, 171),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.37, MUTED, 1, cv2.LINE_AA)
+        fps = paused_fps if paused_fps is not None else cur_fps
+        cv2.putText(panel, f"Last FPS: {fps:.1f}", (20, 194),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.37, MUTED, 1, cv2.LINE_AA)
     else:
-        cv2.putText(panel, "[RUNNING]", (6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, GREEN, 1)
-        y += 22
+        hp = max(0.0, min(1.0, float(health_stable)))
+        cv2.putText(panel, f"HP {hp:5.1%}" if valid else "HP --", (20, 171),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, WHITE, 1, cv2.LINE_AA)
+        bar_x1, bar_y1, bar_x2, bar_y2 = 105, 158, 245, 173
+        cv2.rectangle(panel, (bar_x1, bar_y1), (bar_x2, bar_y2), MUTED, 1)
+        fill = int((bar_x2 - bar_x1 - 2) * hp)
+        if valid and fill > 0:
+            fill_color = SAFE if hp >= 0.75 else (45, 185, 225) if hp >= 0.25 else ARMED
+            cv2.rectangle(panel, (bar_x1 + 1, bar_y1 + 1),
+                          (bar_x1 + 1 + fill, bar_y2 - 1), fill_color, -1)
+        visible_state = str(state or 'unknown').upper()[:14] if valid else "NO HUD"
+        cv2.putText(panel, f"State: {visible_state}", (20, 198),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, WHITE, 1, cv2.LINE_AA)
+        cv2.putText(panel, f"FPS: {cur_fps:.1f}", (265, 171),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, MUTED, 1, cv2.LINE_AA)
 
-        # 血量条
-        hp = max(0.0, min(1.0, health_stable))
-        cv2.putText(panel, "HP:", (6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, WHITE, 1)
-        bar_w = 100
-        bar_x, bar_y = 30, y - 9
-        cv2.rectangle(panel, (bar_x, bar_y), (bar_x + bar_w, bar_y + 12), GRAY, 1)
-        fill_w = int(bar_w * hp)
-        if fill_w > 0:
-            fill_color = GREEN if hp > 0.5 else YELLOW if hp > 0.25 else RED
-            cv2.rectangle(panel, (bar_x, bar_y), (bar_x + fill_w, bar_y + 12), fill_color, -1)
-        cv2.putText(panel, f"{hp:.0%}", (bar_x + bar_w + 6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, WHITE, 1)
-        y += 22
+    cv2.line(panel, (12, 214), (PANEL_W - 12, 214), PANEL_EDGE, 1)
+    cv2.rectangle(panel, ISLAND_BUTTON[:2], ISLAND_BUTTON[2:], BLUE_DARK, -1)
+    cv2.putText(panel, "ISLAND  [-]", (28, 234),
+                cv2.FONT_HERSHEY_SIMPLEX, .37, WHITE, 1, cv2.LINE_AA)
+    cv2.putText(panel, "F8  START / STOP", (167, 234),
+                cv2.FONT_HERSHEY_SIMPLEX, .35, MUTED, 1, cv2.LINE_AA)
+    return _theme_panel(panel) if theme == "cutting_edge" else panel
 
-        # 状态
-        cv2.putText(panel, f"State: {state.upper()}", (6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, WHITE, 1)
-        y += 16
 
-    # FPS
-    if paused and paused_fps is not None:
-        cv2.putText(panel, f"FPS: {paused_fps:.1f} (paused)", (6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, GRAY, 1)
+def draw_island(*, paused, health=0.0, valid=True, theme="legacy"):
+    """Compact pill; background is clipped to a rounded region on Windows."""
+    panel = np.full((ISLAND_H, ISLAND_W, 3), BACKGROUND, np.uint8)
+    color = MUTED if paused else SAFE if valid else (45, 185, 225)
+    cv2.circle(panel, (22, 28), 5, color, -1, cv2.LINE_AA)
+    title = "PAUSED" if paused else "LIVE" if valid else "NO HUD"
+    cv2.putText(panel, title, (38, 26), cv2.FONT_HERSHEY_SIMPLEX,
+                .44, WHITE, 1, cv2.LINE_AA)
+    cv2.putText(panel, "F8 START / STOP", (38, 43), cv2.FONT_HERSHEY_SIMPLEX,
+                .26, MUTED, 1, cv2.LINE_AA)
+    hp = f"{max(0.0, min(1.0, float(health))):.0%}" if valid and not paused else "--"
+    cv2.putText(panel, "HP " + hp, (137, 33), cv2.FONT_HERSHEY_SIMPLEX,
+                .49, WHITE, 1, cv2.LINE_AA)
+    cv2.rectangle(panel, ISLAND_TOGGLE[:2], ISLAND_TOGGLE[2:], BLUE_DARK if paused else ARMED_DARK, -1)
+    if paused:
+        cv2.fillConvexPoly(panel, np.array([[242, 19], [242, 37], [256, 28]], np.int32), WHITE)
     else:
-        cv2.putText(panel, f"FPS: {cur_fps:.1f}", (6, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, WHITE, 1)
-    y += 22
+        cv2.rectangle(panel, (240, 20), (245, 36), WHITE, -1)
+        cv2.rectangle(panel, (250, 20), (255, 36), WHITE, -1)
+    cv2.rectangle(panel, ISLAND_EXPAND[:2], ISLAND_EXPAND[2:], (43, 47, 55), -1)
+    cv2.rectangle(panel, (293, 20), (312, 36), MUTED, 1, cv2.LINE_AA)
+    cv2.line(panel, (293, 25), (312, 25), MUTED, 1, cv2.LINE_AA)
+    return _theme_panel(panel) if theme == "cutting_edge" else panel
 
-    # 按键提示
-    cv2.putText(panel, "[P]Pause  [ESC]Quit", (6, y + 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.3, GRAY, 1)
 
+def _theme_panel(panel):
+    """Static skin only; preserve hit boxes, dimensions and window policy."""
+    palette = {BACKGROUND: (27, 21, 8), PANEL_EDGE: (81, 69, 40),
+               BLUE: (232, 201, 65), BLUE_DARK: (53, 44, 22),
+               SAFE_DARK: (53, 44, 22), SAFE: (232, 201, 65),
+               WHITE: (244, 242, 234), MUTED: (162, 152, 130)}
+    original = panel.copy()
+    for old, new in palette.items():
+        panel[np.all(original == old, axis=2)] = new
+    h, w = panel.shape[:2]
+    color = (71, 59, 30)
+    cv2.line(panel, (3, 3), (w-4, 3), color, 1)
+    cv2.line(panel, (3, h-4), (w-4, h-4), color, 1)
+    for x in range(12, min(w-10, 100), 10):
+        cv2.circle(panel, (x, h-4), 0, color, 1)
     return panel
 
 
-def set_panel_topmost(window_title: str = PANEL_NAME):
-    """将 OpenCV 窗口设为始终置顶（Windows only）。
+def set_panel_topmost(window_title: str = PANEL_NAME, *, interactive: bool = True) -> bool:
+    """Reassert topmost through OpenCV and Win32, using pointer-safe signatures."""
+    if sys.platform == "win32":
+        # OpenCV's Win32 topmost property omits SWP_NOACTIVATE. Never invoke
+        # that path on Windows: its periodic refresh can steal the game focus.
+        from src.panel_window import set_topmost
+        return set_topmost(window_title)
+    log = logging.getLogger(__name__)
+    applied = False
 
-    非 Windows 平台或窗口尚未创建时静默降级。
-    独占全屏游戏模式下由 DWM 控制，此设置可能不生效。
-    """
-    import ctypes
-    import logging
-    _log = logging.getLogger(__name__)
+    # HighGUI backends that support this property can retain it across redraws.
     try:
-        hwnd = ctypes.windll.user32.FindWindowW(None, window_title)
-        if hwnd:
-            ctypes.windll.user32.SetWindowPos(
-                hwnd, -1, 0, 0, 0, 0, 0x0002 | 0x0001,  # HWND_TOPMOST, SWP_NOMOVE|SWP_NOSIZE
-            )
-        else:
-            _log.debug("set_panel_topmost: window not found: %s", window_title)
-    except Exception:
-        _log.debug("set_panel_topmost: not available on this platform")
+        topmost_property = getattr(cv2, "WND_PROP_TOPMOST", None)
+        if topmost_property is not None:
+            cv2.setWindowProperty(window_title, topmost_property, 1)
+            applied = True
+    except cv2.error:
+        log.debug("OpenCV topmost property is unavailable")
+
+    return applied
+
+
+def install_panel_controls(controller: PanelController,
+                           window_title: str = PANEL_NAME) -> bool:
+    """Install click handling after the first frame created the OpenCV window."""
+    try:
+        cv2.setMouseCallback(window_title, controller.on_mouse)
+        if sys.platform == "win32":
+            from src.panel_window import install_guard
+            if not install_guard(window_title, controller):
+                raise RuntimeError("Cannot install non-activating panel")
+        set_panel_topmost(window_title, interactive=True)
+        return True
+    except cv2.error:
+        logging.getLogger(__name__).warning(
+            "Clickable control panel unavailable; global F8 remains active")
+        return False
+
+
+def panel_window_closed(window_title: str = PANEL_NAME) -> bool:
+    """Treat a user-closed safety panel as a request to safely exit."""
+    if sys.platform == "win32":
+        from src.panel_window import guard_closed
+        if guard_closed(window_title):
+            return True
+    try:
+        return cv2.getWindowProperty(window_title, cv2.WND_PROP_VISIBLE) < 1
+    except cv2.error:
+        return False
+
+
+def update_panel_layout(controller, window_title=PANEL_NAME):
+    if sys.platform == "win32":
+        from src.panel_window import update_layout
+        size = (ISLAND_W, ISLAND_H) if controller.compact else (PANEL_W, PANEL_H)
+        update_layout(window_title, controller.compact, size)
+
+
+def release_panel_controls(window_title=PANEL_NAME):
+    if sys.platform == "win32":
+        from src.panel_window import release_guard
+        release_guard(window_title)

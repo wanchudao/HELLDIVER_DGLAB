@@ -1,8 +1,13 @@
 # HELLDIVER_DGLAB 依赖
 # Phase 8 (DG-LAB SOCKET v2): websocket-client 用于连接 DG-LAB 后端
 websocket-client>=1.6.0
+# DGHub 插件模式: websockets (async) 用于连接 DGHub 主程序
+websockets>=14.0
 
 # 核心依赖
 numpy>=1.24.0
 opencv-python>=4.8.0
+# 源码版 runner 继续使用 mss；DGHub 插件使用 dxcam 的 DXGI
+# Desktop Duplication 后端，避免全屏 DX 游戏下的 GDI BitBlt 卡死。
 mss>=9.0.0
+dxcam>=0.3.0
