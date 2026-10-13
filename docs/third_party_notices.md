@@ -1,6 +1,6 @@
 # 第三方来源与运行库说明
 
-本次发布为 HELLDIVER DGLAB 独立主版本。各组件分别保留自身许可；本说明不为第三方内容增加授权，不将整个软件包统一许可为 MIT。
+本说明覆盖 HELLDIVER DGLAB 独立主版本和 DGHub 1.0.5 插件。各组件分别保留自身许可；本说明不为第三方内容增加授权，不将整个软件包统一许可为 MIT。
 
 ## DG-LAB 后端及波形
 
@@ -11,17 +11,18 @@
 | 组件 | 本次版本 | 说明 |
 |---|---|---|
 | Python | 3.14.7 | 许可文本包含在 LICENSES/Python |
-| Node.js | 24.19.0 | 使用对应版本上游完整 LICENSE，含内嵌第三方声明；LICENSES/Node |
+| Node.js | 24.19.0 | 仅独立版；使用对应版本上游完整 LICENSE，含内嵌第三方声明；LICENSES/Node |
 | NumPy | 2.5.2 | 包内 numpy dist-info 的 licenses 保留 |
 | OpenCV Python | 5.0.0.93 | 自身及第三方许可文本在 LICENSES/opencv-python |
 | Pillow | 12.3.0 | LICENSES/Pillow |
 | MSS | 10.2.0 | LICENSES/mss |
 | websocket-client | 1.9.1 | LICENSES/websocket-client |
 | qrcode | 8.2 | LICENSES/qrcode |
+| websockets | 17.1 | DGHub 插件；包内 websockets dist-info 的 licenses 保留 |
 | Tcl／Tk | 随 Python 构建 | LICENSES/tcl、LICENSES/tk 保留许可条款 |
 | PyInstaller | 6.22.2 | 构建工具与引导程序相关说明，含分发例外；LICENSES/PyInstaller |
 
-Node 后端依赖 ws 8.21.0、uuid 11.1.1、winston 3.17.0、dotenv 16.6.1 及其传递依赖；许可文本保留在 _internal/backend/node_modules 的对应组件目录。微软运行库和 Windows 系统组件依各自许可使用，不受本项目另行授权。
+独立版的 Node 后端依赖 ws 8.21.0、uuid 11.1.1、winston 3.17.0、dotenv 16.6.1 及其传递依赖；许可文本保留在 _internal/backend/node_modules 的对应组件目录。DGHub 插件不包含 Node、qrcode、websocket-client 或官方后端，使用 websockets 连接本机宿主并读取其波形目录。微软运行库和 Windows 系统组件依各自许可使用，不受本项目另行授权。
 
 Node 许可采用 https://raw.githubusercontent.com/nodejs/node/v24.19.0/LICENSE。Tcl／Tk 许可采用各自上游仓库的 license.terms。其他文本取自本轮实际构建环境的发行包，而不是重新给组件选择许可证。
 
