@@ -26,7 +26,7 @@ def source_files():
             files.add(path.relative_to(ROOT).as_posix())
     files.update(path.relative_to(ROOT).as_posix() for path in (ROOT/'packaging/backend').glob('*.json'))
     for name in ('main_official_guide.md', 'main_ui_upgrade_20261010.md', 'main_ui_acceptance_20261010.md',
-                 'waveform_sources.md', 'third_party_notices.md', 'build_main.md',
+                 'waveform_sources.md', 'third_party_notices.md', 'build_main.md', 'build_dghub.md',
                  'calibration_guide.md', 'dghub_plugin_guide.md'):
         files.add('docs/'+name)
     for folder in ('docs/images', 'docs/releases'):
