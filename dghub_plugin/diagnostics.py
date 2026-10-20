@@ -8,13 +8,12 @@ import numpy as np
 from PIL import Image
 
 from dghub_plugin.sdk_config import core_config, validate
-from src.hud_profiles import source_label
+from src.hud_profiles import SUPPORTED_RESOLUTIONS, source_label
 from src.vision_pipeline import VisionPipeline
 
 
 def inspect_images(paths, settings, base_config):
     settings = validate(settings)
-    config = core_config(base_config, settings)
     scale = settings["hud_scale_percent"]
     records = []
     for value in paths:
@@ -29,10 +28,15 @@ def inspect_images(paths, settings, base_config):
         if frame is None:
             raise ValueError("无法读取截图")
         height, width = frame.shape[:2]
+        supported = (width, height) in SUPPORTED_RESOLUTIONS
+        config = core_config(base_config, settings, (width, height)) if supported else None
         record = dict(file=path.name, path=str(path), sha256=hashlib.sha256(encoded).hexdigest(),
-                      resolution=f"{width}x{height}", hud_scale=scale, hud_source=source_label(scale),
-                      source=config["hud"]["source"])
-        if (width, height) != (1920, 1080):
+                      resolution=f"{width}x{height}", hud_scale=scale,
+                      hud_source=source_label(scale, (width, height)) if supported else "不支持的分辨率",
+                      source=config["hud"]["source"] if config else None,
+                      profile_version=config["hud"]["version"] if config else None,
+                      base_source=config["hud"].get("base_source", config["hud"]["source"]) if config else None)
+        if not supported:
             record.update(health_raw=None, confidence=0., anchor_score=0., hud_valid=False,
                           first_frame_valid=False, first_frame_reason="resolution_mismatch",
                           reject_reason="resolution_mismatch", outer_coords=None, inner_coords=None,

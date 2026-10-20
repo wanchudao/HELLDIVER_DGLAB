@@ -150,10 +150,19 @@ class MockVisionSession:
             now = self.trigger._clock()
             if event == "low_health":
                 return float("inf")
+            if event == "death_pulse" and self.trigger._mock_sender.mixer.death_active:
+                return float("inf")
             if event == "healing_sustain":
                 return max(0.0, self.trigger._healing_until - now)
             pulse = self.trigger._mock_sender.mixer.pulses.get(event)
             return max(0.0, pulse[1] - now) if pulse else 0.0
+
+    def reset_challenge(self):
+        with self._lock:
+            self._generation += 1
+            self._armed = False
+            self.reason = "challenge_reset"
+            self.trigger.reset_challenge()
 
     def close(self, reason="closed"):
         with self._lock:

@@ -36,7 +36,8 @@ def run(bundle, reports):
     checked = []
     for name, (kind, _offset, _length) in modules.items():
         if kind not in (0, 1) or not (name == "src" or name.startswith("src.")
-                                     or name == "dghub_plugin" or name.startswith("dghub_plugin.")):
+                                     or name == "dghub_plugin" or name.startswith("dghub_plugin.")
+                                     or name in {"tools.resolution_acceptance","tools.resolution_fixtures"}):
             continue
         path = ROOT.joinpath(*name.split(".")).with_suffix(".py")
         if not path.is_file():

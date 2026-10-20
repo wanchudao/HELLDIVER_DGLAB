@@ -83,7 +83,8 @@ class CaptureWorker:
             if not capture.is_ready:
                 raise RuntimeError()
             self.monitor_size = capture.monitor_size
-            if self.monitor_size != (1920, 1080):
+            from src.hud_profiles import SUPPORTED_RESOLUTIONS
+            if self.monitor_size not in SUPPORTED_RESOLUTIONS:
                 self.error = "capture_size_mismatch"
                 return
             self.ready.set()
@@ -102,7 +103,7 @@ class CaptureWorker:
                         reply = FrameReply(request.generation, captured_at, error="stale_capture")
                     elif frame is None:
                         reply = FrameReply(request.generation, captured_at, error="capture_failed")
-                    elif frame.shape[:2] != (1080, 1920):
+                    elif frame.shape[:2] != (self.monitor_size[1], self.monitor_size[0]):
                         reply = FrameReply(request.generation, captured_at, error="capture_size_mismatch")
                     else:
                         processed = request.vision.process_frame(frame, request.vision_ticket,

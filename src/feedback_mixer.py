@@ -10,6 +10,14 @@ import time
 from dataclasses import dataclass
 from src.waveforms import WAVEFORM_V3
 
+DEATH_FEEDBACK_MODES = ("pulse", "until_revive", "until_reset")
+
+
+def validate_death_mode(value):
+    if not isinstance(value, str) or value not in DEATH_FEEDBACK_MODES:
+        raise ValueError("死亡反馈模式必须为 pulse、until_revive 或 until_reset")
+    return value
+
 
 def selected_channels(sender: dict) -> tuple[str, ...]:
     mode = sender.get("channel_mode", "a")
@@ -96,6 +104,7 @@ class FeedbackMixer:
     def reset(self):
         self.low_health = False
         self.healing = False
+        self.death_active = False
         self.lease_deadline = 0.0
         self.pulses: dict[str, tuple[float, float, str, float]] = {}
 
@@ -106,12 +115,14 @@ class FeedbackMixer:
         self.pulses = {name: pulse for name, pulse in self.pulses.items()
                        if pulse[1] > now}
 
-    def update_continuous(self, *, low_health: bool, healing: bool, hp: float, now: float):
+    def update_continuous(self, *, low_health: bool, healing: bool, hp: float, now: float,
+                          death_active: bool = False):
         hp = bounded_number(hp, "hp", 0, 1)
         self._expire(now)
         self.lease_deadline = now + self.lease_sec
         self.low_health = bool(low_health) and hp > 0
         self.healing = bool(healing) and hp > 0
+        self.death_active = bool(death_active)
         if hp > 0:
             self.pulses.pop("death_pulse", None)
 
@@ -148,7 +159,8 @@ class FeedbackMixer:
     def outputs(self, now: float) -> dict[str, MixedOutput]:
         self._expire(now)
         dominant = self.dominant_action(now)
-        waveform = self.pulses[dominant][2] if dominant else ""
+        waveform = (self.profiles["death_pulse"]["waveform"] if dominant == "death_continuous"
+                    else self.pulses[dominant][2] if dominant else "")
         if not waveform and self.healing and self._contributes(self.healing_strength, self.healing_strength_b):
             waveform = self.healing_waveform
         if not waveform and self.low_health and self._contributes(self.low_strength, self.low_strength_b):
@@ -159,6 +171,8 @@ class FeedbackMixer:
                 ("B", self.low_strength_b, self.healing_strength_b, self.max_strength_b, 3)):
             strength = (low if self.low_health else 0) + (heal if self.healing else 0)
             strength += sum(p[pulse_index] for p in self.pulses.values())
+            if self.death_active:
+                strength += self.profiles["death_pulse"]["strength" if ch == "A" else "strength_b"]
             # 先量化再限幅；不会把 25.7 的旧配置上限四舍五入到 26。
             strength = min(int(limit), int(round(strength))) if ch in self.channels else 0
             result[ch] = MixedOutput(strength, waveform) if strength > 0 else MixedOutput()
@@ -166,6 +180,9 @@ class FeedbackMixer:
 
     def dominant_action(self, now: float) -> str:
         self._expire(now)
+        death = self.profiles["death_pulse"]
+        if self.death_active and self._contributes(death["strength"], death["strength_b"]):
+            return "death_continuous"
         return next((name for name in ("death_pulse", "heal_pulse", "injury_pulse")
                      if name in self.pulses and self._contributes(self.pulses[name][0], self.pulses[name][3])), "")
 

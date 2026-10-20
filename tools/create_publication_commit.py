@@ -7,10 +7,15 @@ from pathlib import Path
 import subprocess
 import zipfile
 
-from publication_manifest import ROOT, source_files
+if __package__:
+    from .publication_manifest import ROOT, source_files
+else:
+    from publication_manifest import ROOT, source_files
 
 
-def create(parent, branch, output):
+def create(parent, branch, output, *,
+           message='release: independent Cutting Edge UI main-v1.0.0-beta.1',
+           preserve_parent=False):
     output = output.resolve()
     if not output.is_relative_to(ROOT/'build'):
         raise RuntimeError('Publication staging must remain inside project build/')
@@ -30,15 +35,16 @@ def create(parent, branch, output):
     files = source_files()
     git('read-tree', parent)
     tracked = [path.decode() for path in git('ls-files','-z').split(b'\0') if path]
-    remove = sorted(set(tracked)-set(files))
+    # Public-release updates can preserve unrelated files added on the remote
+    # branch. Historical clean-snapshot callers retain their existing default.
+    remove = [] if preserve_parent else sorted(set(tracked)-set(files))
     if remove:
         git('update-index','--force-remove','-z','--stdin', data='\0'.join(remove).encode()+b'\0')
     for offset in range(0, len(files), 40):
         git('add','-f','--', *files[offset:offset+40])
     git('diff','--cached','--check')
     tree = git('write-tree').decode().strip()
-    sha = git('commit-tree', tree, '-p', parent,
-              '-m','release: independent Cutting Edge UI main-v1.0.0-beta.1').decode().strip()
+    sha = git('commit-tree', tree, '-p', parent, '-m', message).decode().strip()
     git('update-ref','refs/heads/'+branch, sha, '')
     snapshot = output/'source_check'
     snapshot.mkdir()
@@ -49,7 +55,8 @@ def create(parent, branch, output):
         package.extractall(snapshot)
     report = dict(status='ok', commit=sha, tree=tree, parent=parent, branch=branch,
                   files=len(files), tracked_artifacts_removed=len(remove), checkout_modified=False,
-                  normal_index_modified=False, snapshot=str(snapshot))
+                  normal_index_modified=False, parent_files_preserved=preserve_parent,
+                  snapshot=str(snapshot))
     (output/'source_commit.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     (output/'source_manifest.txt').write_text('\n'.join(files)+'\n', encoding='utf-8')
     return report
@@ -60,5 +67,9 @@ if __name__ == '__main__':
     parser.add_argument('--parent',required=True)
     parser.add_argument('--branch',required=True)
     parser.add_argument('--output',required=True,type=Path)
+    parser.add_argument('--message', default='release: independent Cutting Edge UI main-v1.0.0-beta.1')
+    parser.add_argument('--preserve-parent', action='store_true',
+                        help='Keep parent files outside the publication allowlist')
     args=parser.parse_args()
-    print(json.dumps(create(args.parent,args.branch,args.output),indent=2))
+    print(json.dumps(create(args.parent,args.branch,args.output, message=args.message,
+                            preserve_parent=args.preserve_parent),indent=2))

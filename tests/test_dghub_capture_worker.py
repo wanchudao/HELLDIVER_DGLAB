@@ -100,8 +100,8 @@ def test_close_does_not_wait_for_blocked_native_grab(client):
     assert worker.take() is None
 
 
-@pytest.mark.parametrize("size", [(1280, 720), (1919, 1079), (2560, 1440)])
-def test_non1080p_capture_is_rejected_before_any_job(client, size):
+@pytest.mark.parametrize("size", [(1280, 720), (1919, 1079), (3440, 1440)])
+def test_unsupported_capture_size_is_rejected_before_any_job(client, size):
     ready(client)
     fixture = CaptureFixture()
     fixture.monitor_size = size

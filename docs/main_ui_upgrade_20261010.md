@@ -1,5 +1,7 @@
 # 遥遥领先 UI 独立版：测试、升级与回退
 
+v1.0.0 Beta 2 新增三种死亡模式。升级前保存旧完整目录及 feedback_settings.ini；回退到 Beta 1 时同时恢复旧反馈配置，因为旧版严格校验不认识 death_feedback_mode。本次没有为独立版增加直播小按钮。
+
 本包使用官方后端，不是 DGHub 插件。完整解压后直接运行 HELLDIVER_Main.exe；Python、Node、Pillow、OpenCV 等运行库已经随包，不需要自行安装，也不联网下载界面素材。不要只复制 EXE。
 
 ## 最快的测试方式

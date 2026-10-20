@@ -50,7 +50,7 @@ def _release_evidence(reports, exe_sha256):
 
 
 def _attachments(attachments, exe_sha256):
-    allowed = {"freeze.json", "startup.json", "regression.xml", "验收记录.md", "native_runtime.json"}
+    allowed = {"freeze.json", "startup.json", "regression.xml", "验收记录.md", "native_runtime.json", "live_panel.json", "resolution.json"}
     if not isinstance(attachments, dict) or not set(attachments) <= allowed:
         raise ValueError("Unknown acceptance attachment")
     result = {}
@@ -58,7 +58,16 @@ def _attachments(attachments, exe_sha256):
         path = Path(location).resolve()
         if not path.is_file() or path.is_symlink():
             raise ValueError("Acceptance attachment must be an ordinary file")
-        if name == "freeze.json":
+        if name == "resolution.json":
+            report=json.loads(path.read_text(encoding="utf-8"))
+            if (report.get("status")!="ok" or report.get("frozen") is not True
+                    or report.get("exe_sha256")!=exe_sha256 or report.get("profile_combinations")!=33
+                    or len(report.get("synthetic_cross_checks",[]))!=363
+                    or len(report.get("resampled_photo_checks",[]))!=154
+                    or report.get("high_resolution_real_game_tested") is not False
+                    or report.get("physical_device_used") is not False):
+                raise ValueError("Resolution attachment is incomplete or mismatched")
+        elif name == "freeze.json":
             report = json.loads(path.read_text(encoding="utf-8"))
             if (report.get("status") != "ok" or report.get("exe_sha256") != exe_sha256
                     or any(report.get(key) is not True for key in
@@ -69,6 +78,13 @@ def _attachments(attachments, exe_sha256):
                     or report.get("native_host_tested") is not False
                     or report.get("physical_device_used") is not False):
                 raise ValueError("Freeze attachment did not pass the scoped final EXE check")
+        elif name == "live_panel.json":
+            report = json.loads(path.read_text(encoding="utf-8"))
+            if (report.get("status") != "ok" or report.get("exe_sha256") != exe_sha256
+                    or report.get("frozen") is not True or report.get("native_button_mapping") is not True
+                    or report.get("physical_device_used") is not False
+                    or not report.get("checks") or not all(c.get("foreground_unchanged") is True for c in report["checks"])):
+                raise ValueError("Live button evidence did not pass the final EXE native test")
         elif name == "startup.json":
             report = json.loads(path.read_text(encoding="utf-8"))
             state = report.get("state", {})
@@ -88,7 +104,9 @@ def _attachments(attachments, exe_sha256):
         elif name == "native_runtime.json":
             report = json.loads(path.read_text(encoding="utf-8"))
             if (report.get("status") != "ok" or report.get("exe_sha256") != exe_sha256
-                    or report.get("host_exe_sha256") != "86a6fd69060588631d023ae97bb3cb58370cd1cf898b8612c7c52a43a55301a2"
+                    or report.get("host_exe_sha256") not in {
+                        "86a6fd69060588631d023ae97bb3cb58370cd1cf898b8612c7c52a43a55301a2",
+                        "4734915664f45476111ea1b7590024f396784af869f71086d721313fbe5a7dc5"}
                     or report.get("threshold_roundtrips") != list(range(101))
                     or report.get("session_snapshot_thresholds") != [75, 30]
                     or any(report.get(key) is not True for key in
@@ -152,7 +170,7 @@ def pack(bundle, destination, *, release=False, acceptance_reports=None,
             for name, path in attachments.items():
                 archive.writestr(f"acceptance/{name}", path.read_bytes())
             archive.writestr("BUILD_MANIFEST.json", json.dumps(dict(
-                plugin=manifest(), host_target="DGHub 1.9.6 Windows x64 SDK v1",
+                plugin=manifest(), host_target=("DGHub " + native_version(evidence) + " Windows x64 SDK v1"),
                 exe_sha256=exe_sha256, user_runtime_dependencies=[],
                 dependencies="Bundled Python runtime, vision libraries and WebSocket client in _internal; no Node backend",
                 evidence={kind: dict(file=f"acceptance/{kind}.json", sha256=_file_hash(path))
@@ -173,6 +191,10 @@ def pack(bundle, destination, *, release=False, acceptance_reports=None,
                 exe_sha256=exe_sha256)
 
 
+def native_version(evidence):
+    return evidence.get("native", (None, {}))[1].get("host_version", "1.9.6")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
@@ -184,6 +206,8 @@ def main(argv=None):
     parser.add_argument("--freeze-report", type=Path)
     parser.add_argument("--startup-report", type=Path)
     parser.add_argument("--native-runtime-report", type=Path)
+    parser.add_argument("--live-panel-report", type=Path)
+    parser.add_argument("--resolution-report", type=Path)
     parser.add_argument("--regression-report", type=Path)
     parser.add_argument("--acceptance-note", type=Path)
     args = parser.parse_args(argv)
@@ -195,6 +219,8 @@ def main(argv=None):
                           acceptance_attachments={name: path for name, path in
                               (("freeze.json", args.freeze_report), ("startup.json", args.startup_report),
                                ("native_runtime.json", args.native_runtime_report),
+                               ("live_panel.json", args.live_panel_report),
+                               ("resolution.json", args.resolution_report),
                                ("regression.xml", args.regression_report),
                                ("验收记录.md", args.acceptance_note)) if path is not None})))
 

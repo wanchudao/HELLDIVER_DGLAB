@@ -6,7 +6,7 @@ from tkinter import messagebox, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
-from src.hud_settings import SCALES, default_settings
+from src.hud_settings import SCALES, EXPERIMENTAL_KEY, default_settings
 from src.hud_profiles import source_label
 
 
@@ -32,9 +32,9 @@ class HudSettingsDialog:
             self.window.pack(fill='both', expand=True)
         else:
             theme_window(self.window, parent)
-            self.window.title("HUD 设置 · 1080p 血条适配")
-            self.window.geometry("690x340")
-            self.window.minsize(630, 320)
+            self.window.title("HUD 设置 · 多分辨率血条适配")
+            self.window.geometry("690x420")
+            self.window.minsize(630, 400)
             self.window.transient(parent)
             self.window.grab_set()
             self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -55,6 +55,10 @@ class HudSettingsDialog:
                                      state="readonly", width=40)
         self.scale_box.pack(side="left", padx=5)
         self.scale_box.bind("<<ComboboxSelected>>", lambda event: self.update_source())
+        self.experimental = tk.BooleanVar(value=store.values.get(EXPERIMENTAL_KEY, False))
+        self.experimental_box = ttk.Checkbutton(outer, text="允许实验性 2K／4K 适配（推算配置，未实机验收）",
+                                               variable=self.experimental)
+        self.experimental_box.pack(anchor="w", pady=(14, 0))
         self.source = tk.StringVar()
         ttk.Label(outer, textvariable=self.source, wraplength=640).pack(anchor="w", pady=12)
         self.hint = tk.StringVar()
@@ -74,14 +78,17 @@ class HudSettingsDialog:
         if values["mode"] == "legacy":
             self.source.set("旧版兼容预设：保持原有识别位置，未将历史坐标解释为 HUD 1.00。")
         else:
-            self.source.set(f"适用画面：1920×1080，游戏完整铺满所选屏幕。\n"
-                            f"来源：{source_label(values['scale_percent'])}。")
+            self.source.set(f"1080p 来源：{source_label(values['scale_percent'])}。\n"
+                            "2560×1440／3840×2160 为等比推算，未实机验收；实时启用需勾选上方选项。\n"
+                            "分辨率按所选屏幕实际抓屏尺寸读取；游戏须完整铺满屏幕。")
 
     def update_enabled(self):
         running = bool(self.is_running())
         self._last_running = running
         self.scale_box.configure(state="disabled" if running else "readonly")
         self.save_button.configure(state="disabled" if running else "normal")
+        if hasattr(self, "experimental_box"):
+            self.experimental_box.configure(state="disabled" if running else "normal")
         if running:
             self.hint.set("当前为只读：请关闭本窗口并点击主界面的停止全部后再修改。F8 暂停不会解锁设置。")
         elif self.store.error:
@@ -96,7 +103,9 @@ class HudSettingsDialog:
 
     def save(self):
         try:
-            self.store.save(selected_values(self.selection.get()), running=self.is_running())
+            values = selected_values(self.selection.get())
+            values[EXPERIMENTAL_KEY] = self.experimental.get()
+            self.store.save(values, running=self.is_running())
             self.on_saved()
             self.hint.set("已保存，下次启动会话生效。")
         except (OSError, ValueError) as error:
@@ -136,9 +145,9 @@ def diagnostic_summary(record):
                      "hud_cap_position_mismatch": "端帽位置与所选 HUD 档位不符",
                      "hud_cap_center_mismatch": "端帽高度位置与所选 HUD 档位不符",
                      "hud_cap_spacing_mismatch": "血槽长度与所选 HUD 档位不符",
-                     "hud_frame_size_mismatch": "图片尺寸与 1920×1080 配置不符",
-                     "resolution_mismatch": "图片尺寸与 1920×1080 配置不符",
-                     "frame_resolution_mismatch": "图片尺寸与 1920×1080 配置不符"}
+                     "hud_frame_size_mismatch": "图片尺寸与当前分辨率配置不符",
+                     "resolution_mismatch": "不支持的图片尺寸；支持 1920×1080、2560×1440、3840×2160",
+                     "frame_resolution_mismatch": "图片尺寸与当前分辨率配置不符"}
     return (f"实际图片尺寸：{record.get('resolution', '--')}\n"
             f"当前 HUD：{scale_text}　来源：{source}\n"
             f"HUD 定位：{'通过' if hud_valid else '拒识'}　原始血量估计：{raw}\n"

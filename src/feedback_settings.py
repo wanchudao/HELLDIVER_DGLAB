@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from src.feedback_mixer import FeedbackMixer, configured_waveform, selected_channels
+from src.feedback_mixer import FeedbackMixer, configured_waveform, selected_channels, validate_death_mode
 
 
 EVENTS = (
@@ -20,10 +20,13 @@ SETTING_KEYS = {"channel_mode", "max_strength", "max_strength_b"}
 SETTING_KEYS.update(f"{event}_{suffix}" for event, *_ in EVENTS
                     for suffix in ("waveform", "strength", "strength_b"))
 THRESHOLD_KEY = "low_health_threshold_percent"
+DEATH_MODE_KEY = "death_feedback_mode"
+DEATH_MODE_LABELS = {"定时反馈（默认 5 秒）": "pulse", "持续至复活": "until_revive",
+                     "一次也不能死（F8 重置）": "until_reset"}
 
 
 def default_trigger_settings():
-    return {THRESHOLD_KEY: 75}
+    return {THRESHOLD_KEY: 75, DEATH_MODE_KEY: "pulse"}
 
 
 def threshold_percent(value):
@@ -36,9 +39,10 @@ def threshold_percent(value):
 
 
 def validate_trigger_settings(values):
-    if not isinstance(values, dict) or set(values) - {THRESHOLD_KEY}:
+    if not isinstance(values, dict) or set(values) - {THRESHOLD_KEY, DEATH_MODE_KEY}:
         raise ValueError("触发设置包含不支持的字段")
-    return {THRESHOLD_KEY: threshold_percent(values.get(THRESHOLD_KEY, 75))}
+    return {THRESHOLD_KEY: threshold_percent(values.get(THRESHOLD_KEY, 75)),
+            DEATH_MODE_KEY: validate_death_mode(values.get(DEATH_MODE_KEY, "pulse"))}
 
 
 def default_settings():
@@ -103,9 +107,14 @@ def load_trigger_settings(path):
 
 def save_settings(path, values, *, trigger_settings=None):
     validated = validate_settings(values)
+    path = Path(path)
     # Sender-only callers must retain the threshold, not reset it to 75%.
-    triggers = (load_trigger_settings(path) if trigger_settings is None
-                else validate_trigger_settings(trigger_settings))
+    if trigger_settings is not None and not isinstance(trigger_settings, dict):
+        raise ValueError("触发设置必须为对象")
+    previous = (default_trigger_settings() if trigger_settings is not None
+                and set(trigger_settings) == {THRESHOLD_KEY, DEATH_MODE_KEY}
+                else load_trigger_settings(path))
+    triggers = validate_trigger_settings(previous if trigger_settings is None else previous | trigger_settings)
     cp = configparser.ConfigParser()
     cp["sender"] = {key: str(value) for key, value in validated.items()}
     cp["trigger"] = {key: str(value) for key, value in triggers.items()}
@@ -150,7 +159,10 @@ class SettingsStore:
     def save(self, values, *, running=False, trigger_settings=None):
         if running:
             raise ValueError("请先停止全部，运行中不可修改反馈设置")
-        triggers = validate_trigger_settings(self.trigger_values if trigger_settings is None else trigger_settings)
+        if trigger_settings is not None and not isinstance(trigger_settings, dict):
+            raise ValueError("触发设置必须为对象")
+        triggers = validate_trigger_settings(self.trigger_values if trigger_settings is None
+                                             else self.trigger_values | trigger_settings)
         self.values = save_settings(self.path, values, trigger_settings=triggers)
         self.trigger_values = triggers
         self.error = ""

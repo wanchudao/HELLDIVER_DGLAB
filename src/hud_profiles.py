@@ -11,6 +11,8 @@ from fractions import Fraction
 SCALES = tuple(range(75, 126, 5))
 PROFILE_VERSION = "hud1080_v1"
 RESOLUTION = (1920, 1080)
+SUPPORTED_RESOLUTIONS = (RESOLUTION, (2560, 1440), (3840, 2160))
+EXTRAPOLATED_PROFILE_VERSION = "hud_resolution_v1"
 MEASURED_SCALES = (75, 80, 85, 90, 95, 100, 125)
 
 # x1, y1, x2, y2 of the slot; cap stem centers; cap top/bottom;
@@ -38,14 +40,36 @@ def _check_scale(percent):
     return percent
 
 
-def source_label(percent):
+def validate_resolution(resolution):
+    if (not isinstance(resolution, (tuple, list)) or len(resolution) != 2
+            or any(type(value) is not int for value in resolution)
+            or tuple(resolution) not in SUPPORTED_RESOLUTIONS):
+        raise ValueError("支持的画面尺寸为 1920×1080、2560×1440、3840×2160")
+    return tuple(resolution)
+
+
+def pixel_units(config, pixels):
+    """Scale spatial tolerances, never HP/color/time thresholds or UI DPI."""
+    hud = config.get("hud")
+    resolution = RESOLUTION if hud is None else (hud["frame_width"], hud["frame_height"])
+    width, _ = validate_resolution(resolution)
+    value = Fraction(pixels * width, RESOLUTION[0])
+    return (value.numerator + value.denominator - 1) // value.denominator
+
+
+def source_label(percent, resolution=RESOLUTION):
     _check_scale(percent)
+    resolution = validate_resolution(resolution)
+    if resolution != RESOLUTION:
+        base = "1080p 满血实拍" if percent in MEASURED_SCALES else "1080p 插值档位"
+        return f"{resolution[0]}×{resolution[1]} 推算适配，未实机验收（基于{base}）"
     return "已有满血实拍" if percent in MEASURED_SCALES else "插值推算"
 
 
-def get_profile(percent):
+def get_profile(percent, resolution=RESOLUTION):
     """Return a fresh ROI and strict HUD gate suitable for session INI storage."""
     _check_scale(percent)
+    resolution = validate_resolution(resolution)
     if percent in _MEASURED:
         geometry = _MEASURED[percent]
     else:
@@ -77,6 +101,21 @@ def get_profile(percent):
         "position_tolerance_px": 2, "center_tolerance_px": 2,
         "spacing_tolerance_px": 3,
     }
+    if resolution != RESOLUTION:
+        factor = Fraction(resolution[0], RESOLUTION[0])
+        roi = {key: _round_pixel(value * factor) for key, value in roi.items()}
+        spatial = ("cap_left_x", "cap_right_x", "cap_top", "cap_bottom",
+                   "cap_stem_width", "slot_y1", "slot_y2")
+        for key in spatial:
+            hud[key] = _round_pixel(hud[key] * factor)
+        hud["cap_center_y"] = _round_pixel(Fraction(hud["cap_top"] + hud["cap_bottom"] - 1, 2))
+        for key in ("position_tolerance_px", "center_tolerance_px", "spacing_tolerance_px"):
+            value = hud[key] * factor
+            hud[key] = (value.numerator + value.denominator - 1) // value.denominator
+        hud.update(version=EXTRAPOLATED_PROFILE_VERSION, source="resolution_extrapolated",
+                   base_source="measured_full_health" if percent in MEASURED_SCALES else "interpolated",
+                   base_frame_width=RESOLUTION[0], base_frame_height=RESOLUTION[1],
+                   frame_width=resolution[0], frame_height=resolution[1])
     return deepcopy({"roi": roi, "hud": hud})
 
 
@@ -85,7 +124,7 @@ def validate_hud_section(hud, roi):
     if not isinstance(hud, dict) or not isinstance(roi, dict):
         raise ValueError("HUD 配置必须包含完整档位和 ROI")
     percent = _check_scale(hud.get("scale_percent"))
-    expected = get_profile(percent)
+    expected = get_profile(percent, (hud.get("frame_width"), hud.get("frame_height")))
     if set(hud) != set(expected["hud"]):
         raise ValueError("HUD 配置字段缺失或未知，请重新保存 HUD 设置")
     for key, value in expected["hud"].items():

@@ -123,6 +123,8 @@ def test_direct_hardware_entry_rejects_missing_or_wrong_calibration(monkeypatch,
 
 def test_resolution_change_stops_hardware_before_processing_frame(monkeypatch):
     from src import runner_real as runner
+    from src import dglab_sender
+    monkeypatch.setattr(dglab_sender, "is_paired", lambda: True)
     config = load_config(Path(__file__).resolve().parents[1] / "config.example.ini")
     config["calibration"]["calibrated"] = 1
     events = []
@@ -150,7 +152,7 @@ def test_calibration_validation_accepts_current_monitor_dimensions():
 
 
 def _run_control_sequence(monkeypatch, hotkeys, mouse_events, *, failure=None,
-                          compact=False, close_at=None):
+                          compact=False, close_at=None, death_at=None, rejected_at=None):
     """Run the real main loop with deterministic input and no capture/device IO."""
     import cv2
     from src import runner_real as runner
@@ -189,9 +191,17 @@ def _run_control_sequence(monkeypatch, hotkeys, mouse_events, *, failure=None,
         close=lambda: events.append(("capture.close", iteration)),
     )
     pipeline = SimpleNamespace(max_frame_gap=1.0, reset=lambda: None, process=process)
+    def dispatch(observation):
+        events.append(("dispatch", iteration))
+        if iteration == death_at:
+            trigger.challenge_failed = True
+        return {"reason": "continuous_rejected"} if iteration == rejected_at else None
+    def reset_challenge():
+        trigger.challenge_failed = False
+        events.append(("challenge_reset", iteration))
     trigger = SimpleNamespace(
         reset=lambda reason: events.append((reason, iteration)),
-        dispatch=lambda observation: events.append(("dispatch", iteration)),
+        dispatch=dispatch, challenge_failed=False, reset_challenge=reset_challenge,
         safe_stop=lambda: events.append(("safe_stop", iteration)),
     )
     config = load_config(Path(__file__).resolve().parents[1] / "config.example.ini")
@@ -209,6 +219,22 @@ def _run_control_sequence(monkeypatch, hotkeys, mouse_events, *, failure=None,
     monkeypatch.setattr(cv2, "destroyAllWindows", lambda: None)
     runner.main(["--enable-trigger", "--sender-mode", "mock", "--fps", "0"])
     return events
+
+
+def test_real_main_loop_f8_reset_beats_mouse_and_stays_paused(monkeypatch):
+    import cv2
+    events = _run_control_sequence(monkeypatch, [True, False, False, True, False, True],
+        {3: [cv2.EVENT_LBUTTONDOWN, cv2.EVENT_LBUTTONUP]}, death_at=2)
+    assert ("challenge_reset", 4) in events
+    assert not any(("dispatch", tick) in events for tick in (4, 5))
+    assert ("resumed", 6) in events and ("dispatch", 6) in events
+
+
+def test_real_main_loop_sender_rejection_requires_manual_resume(monkeypatch):
+    events = _run_control_sequence(monkeypatch, [True, False, False, False, True], {}, rejected_at=2)
+    assert ("continuous_rejected", 2) in events
+    assert ("dispatch", 3) not in events and ("dispatch", 4) not in events
+    assert ("resumed", 5) in events
 
 
 def test_simultaneous_hotkey_and_stop_click_never_rearm_next_frame(monkeypatch):

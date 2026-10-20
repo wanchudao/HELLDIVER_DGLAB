@@ -242,10 +242,13 @@ def test_default_launcher_forces_mock_even_with_hardware_config(tmp_path):
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
     result = subprocess.run(
         [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", str(script)],
-        input="\n", capture_output=True, text=True, env=env, timeout=15,
+        # CMD's localized PAUSE output can use the OEM code page even when
+        # the parent Python runs in UTF-8 mode. These checks need only ASCII
+        # markers, so retain bytes instead of decoding in a reader thread.
+        input=b"\n", capture_output=True, env=env, timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads((project / "observed.json").read_text()) == [
         "--enable-trigger", "--sender-mode", "mock",
     ]
-    assert "Starting the local SOCKET" not in result.stdout
+    assert b"Starting the local SOCKET" not in result.stdout

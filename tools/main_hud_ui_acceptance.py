@@ -72,13 +72,18 @@ def run(inspect_images, samples_dir, screenshot_dir=None, *, launch_app):
                 dialog.selection.set("1.25")
                 dialog.update_source()
                 dialog.save()
-                assert saved==[{"mode":"manual","scale_percent":125}]
-                assert HudSettingsStore(store.path).snapshot()==saved[0]
+                assert saved==[{"mode":"manual","scale_percent":125,"allow_experimental_high_resolution":False}]
+                assert not dialog.experimental.get()
+                dialog.experimental.set(True)
+                dialog.save()
+                assert HudSettingsStore(store.path).snapshot()["allow_experimental_high_resolution"] is True
+                assert HudSettingsStore(store.path).snapshot()==saved[-1]
                 show(root,dialog.window,"hud_settings")
                 running[0]=True
                 dialog.update_enabled()
                 assert str(dialog.scale_box.cget("state"))=="disabled"
                 assert "disabled" in dialog.save_button.state()
+                assert "disabled" in dialog.experimental_box.state()
                 assert "F8 暂停不会解锁" in dialog.hint.get()
                 show(root,dialog.window,"hud_readonly")
                 dialog.close()
@@ -100,6 +105,12 @@ def run(inspect_images, samples_dir, screenshot_dir=None, *, launch_app):
                 feedback = SettingsStore(Path(directory)/"feedback_settings.ini")
                 running[0] = False
                 dialog = FeedbackSettingsDialog(root, feedback, lambda: running[0])
+                from src.feedback_settings import DEATH_MODE_LABELS
+                assert tuple(dialog.death_mode_box.cget("values")) == tuple(DEATH_MODE_LABELS)
+                for label, mode in DEATH_MODE_LABELS.items():
+                    dialog.death_mode.set(label)
+                    assert dialog.save()
+                    assert SettingsStore(feedback.path).trigger_snapshot()["death_feedback_mode"] == mode
                 dialog.threshold.set("30")
                 dialog.save()
                 assert SettingsStore(feedback.path).trigger_snapshot()["low_health_threshold_percent"] == 30
@@ -108,6 +119,8 @@ def run(inspect_images, samples_dir, screenshot_dir=None, *, launch_app):
                 assert str(dialog.threshold_box.cget("state")) == "normal"
                 show(root, dialog.window, "feedback_threshold")
                 running[0] = True
+                dialog.update_enabled()
+                assert str(dialog.death_mode_box.cget("state")) == "disabled"
                 dialog.update_enabled()
                 assert str(dialog.threshold_box.cget("state")) == "disabled"
                 show(root, dialog.window, "feedback_threshold_readonly")

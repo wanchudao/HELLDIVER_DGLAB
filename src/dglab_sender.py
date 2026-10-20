@@ -489,7 +489,7 @@ def send_action(action: str, payload: Optional[dict] = None) -> dict:
     return {"dispatched": True, "action": action, "mode": "dglab"}
 
 
-def update_continuous(*, low_health: bool, healing: bool, hp: float) -> dict:
+def update_continuous(*, low_health: bool, healing: bool, hp: float, death_active: bool = False) -> dict:
     """有效帧续租；到期后的独立 tick 发起清零，网络操作另受有限 I/O 超时约束。"""
     operation = _operation_generation
     client = _client
@@ -499,7 +499,8 @@ def update_continuous(*, low_health: bool, healing: bool, hp: float) -> dict:
             return {"dispatched": False, "mode": "dglab", "error": "not paired or cancelled"}
         try:
             now = time.monotonic()
-            _mixer.update_continuous(low_health=low_health, healing=healing, hp=hp, now=now)
+            _mixer.update_continuous(low_health=low_health, healing=healing, hp=hp, now=now,
+                                     death_active=death_active)
             if not _render_feedback_locked(client, now):
                 raise RuntimeError("feedback send failed")
             _ensure_feedback_timer_locked(client)

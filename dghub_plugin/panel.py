@@ -5,6 +5,7 @@ import sys
 import time
 
 import cv2
+import numpy as np
 
 from dghub_plugin.hotkey import RegisteredF8Hotkey
 from src.control_panel import (BACKGROUND, BLUE_DARK, MUTED, PANEL_NAME, PanelController,
@@ -35,8 +36,44 @@ class DGHubPanelController(PanelController):
         super().__init__()
         self._popup_pressed = None
         self._popup_requested = None
+        self.live_mode = self.live_small = False
+        self.live_size, self.live_drag_threshold = 32, 4
+        self.monitor_bounds = None
+        self._live_anchor = None
+        self._live_dragged = False
+        self.move_live = lambda dx, dy: None
+
+    def on_live_pointer(self, event, x, y):
+        """Native screen coordinates avoid drift while the tiny window moves."""
+        if not self.live_small:
+            return
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self._live_anchor = (x, y)
+            self._live_dragged = False
+        elif self._live_anchor is not None:
+            dx, dy = x - self._live_anchor[0], y - self._live_anchor[1]
+            if max(abs(dx), abs(dy)) >= self.live_drag_threshold:
+                self._live_dragged = True
+            if self._live_dragged:
+                self.move_live(dx, dy)
+            if event == cv2.EVENT_LBUTTONUP:
+                if not self._live_dragged:
+                    self._layout_requested = True
+                self._live_anchor = None
+
+    def consume_layout(self):
+        if self.live_mode:
+            if not self._layout_requested:
+                return False
+            self.live_small = not self.live_small
+            self.compact = False
+            self.cancel_pending()
+            return True
+        return super().consume_layout()
 
     def on_mouse(self, event, x, y, flags=None, param=None):
+        if self.live_small:
+            return  # native guard owns tiny-window dragging and expansion only
         super().on_mouse(event, x, y, flags, param)
         rects = {} if self.compact else {"check": CHECK_BUTTON, "guide": GUIDE_BUTTON}
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -52,6 +89,8 @@ class DGHubPanelController(PanelController):
     def cancel_pending(self):
         super().cancel_pending()
         self._popup_pressed = self._popup_requested = None
+        self._live_anchor = None
+        self._live_dragged = False
 
     def consume_popup(self):
         value, self._popup_requested = self._popup_requested, None
@@ -81,6 +120,13 @@ class DGHubPanel:
         self.settings = dict(settings)
         self.controller.compact = settings["panel_mode"] == "island"
         self.hidden = settings["panel_mode"] == "hidden"
+        self.controller.live_mode = self.controller.live_small = settings["panel_mode"] == "live"
+        if self.controller.live_mode:
+            import mss
+            with mss.mss() as screen:
+                monitor = screen.monitors[settings["monitor_index"]]
+                self.controller.monitor_bounds = (monitor["left"], monitor["top"],
+                    monitor["left"] + monitor["width"], monitor["top"] + monitor["height"])
         if self.hotkey is not None:
             self.hotkey.start()
             self.hotkey.discard()
@@ -106,12 +152,14 @@ class DGHubPanel:
             self._hotkey_failure_reported = True
             self.controller.cancel_pending()
             self.hidden = self.controller.compact = False
+            self.controller.live_small = False
             actions.append("hotkey_unavailable")
         down = bool(self.key_down()) if self.key_down is not None else False
         key_toggle = (down and not self.hotkey_was_down) if self.hotkey is None else self.hotkey.consume()
         mouse_toggle = self.controller.consume_toggle()
         if not hotkey_failed and (key_toggle or mouse_toggle):
-            actions.append("toggle")
+            actions.append("hotkey_toggle" if key_toggle else "toggle")
+            self.controller.cancel_pending()
         self.hotkey_was_down = down
         popup = self.controller.consume_popup()
         if popup:
@@ -120,12 +168,13 @@ class DGHubPanel:
             update_panel_layout(self.controller, PANEL_NAME)
         if not self.hidden:
             output = session.output_snapshot()
+            failed = bool(session.vision is not None and session.vision.trigger.challenge_failed)
             image = draw_control_panel(health_stable=session._last_hp or 0, valid=session._last_hp is not None,
                                        paused=not session.armed,
                                        output_mode="VISION ONLY" if session.armed and not session.device_output_enabled else "DGHUB",
                                        compact=self.controller.compact,
                                        stop_reason=PAUSE_REASONS.get(session.last_pause_reason,
-                                                                     session.last_pause_reason))
+                                                                     session.last_pause_reason), challenge_failed=failed)
             if not self.controller.compact:
                 for rect, label in ((CHECK_BUTTON, "CHECK"), (GUIDE_BUTTON, "GUIDE")):
                     cv2.rectangle(image, rect[:2], rect[2:], BLUE_DARK, -1)
@@ -136,6 +185,9 @@ class DGHubPanel:
                         f"A {output.get('A', {}).get('strength', 0)}%  "
                         f"B {output.get('B', {}).get('strength', 0)}%")
                 cv2.putText(image, text, (20, 199), cv2.FONT_HERSHEY_SIMPLEX, .39, MUTED, 1, cv2.LINE_AA)
+                if self.controller.live_mode:
+                    cv2.rectangle(image, (20, 218), (135, 242), BLUE_DARK, -1)
+                    cv2.putText(image, "LIVE BUTTON [-]", (24, 234), cv2.FONT_HERSHEY_SIMPLEX, .31, MUTED, 1, cv2.LINE_AA)
             if not hotkey_ready:
                 if self.controller.compact:
                     cv2.rectangle(image, (35, 32), (130, 48), BACKGROUND, -1)
@@ -150,12 +202,19 @@ class DGHubPanel:
                     cv2.rectangle(image, (15, 152), (365, 177), BACKGROUND, -1)
                     cv2.putText(image, "F8 unavailable; use local button", (20, 171),
                                 cv2.FONT_HERSHEY_SIMPLEX, .37, MUTED, 1, cv2.LINE_AA)
+            if self.controller.live_small:
+                size = self.controller.live_size
+                image = np.full((size, size, 3), BACKGROUND, np.uint8)
+                edge = (45, 55, 225) if failed else MUTED if not session.armed else (62, 170, 92) if session._last_hp is not None else (45, 185, 225)
+                cv2.rectangle(image, (1, 1), (size - 2, size - 2), edge, max(1, size // 16))
+                cv2.rectangle(image, (size // 3, size // 3), (2 * size // 3, 2 * size // 3), MUTED, 1)
+                cv2.line(image, (size // 3, size * 5 // 12), (2 * size // 3, size * 5 // 12), MUTED, 1)
             cv2.imshow(PANEL_NAME, image)
             if not self.ready:
                 if not install_panel_controls(self.controller, PANEL_NAME):
                     raise RuntimeError("Non-activating panel installation failed")
                 self.ready = True
-                update_panel_layout(self.controller, PANEL_NAME)
+            update_panel_layout(self.controller, PANEL_NAME)
             if self.clock() - self._last_topmost >= .5:
                 set_panel_topmost(PANEL_NAME)
                 self._last_topmost = self.clock()

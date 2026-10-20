@@ -19,6 +19,8 @@ python -m venv .venv
 
 tools/dghub_package_candidate.py 从完整运行目录生成 ZIP。正式封包需要绑定同一 EXE 的冻结一致性、最终 EXE 协议和原生 SDK 策略报告；只提供别的版本报告会被拒绝。可查看该工具的 --help 和插件使用指南中的测试范围。
 
+1.0.7 另附 --resolution-report，并用最终 EXE 执行 tools/dghub_frozen_protocol_acceptance.py --resolution-cases，覆盖 1440p／4K 的识别、输出与停止。原生导入检查需核对实验开关保存、待生效及重新启用后应用；没有高分辨率显示器时，此项原生启动仍只代表实际桌面尺寸，不代表高分辨率实机通过。最终交付用 tools/finalize_death_live_package.py 再核对高分辨率附件及运行文件，保留推算标识。
+
 回归应覆盖门槛、11 档 HUD、双通道、F8／浮窗、完整波形周期、短租约和停止。原生 DGHub 测试需要自己的宿主安装及隔离环境，不能用软件服务代替。仓库不包含用户宿主配置、访问令牌、会话、完整原生报告或 MP4；缺失的外部测试输入需另行准备。
 
-tools/prepare_dghub_public_release.py 为已验收 ZIP 追加公开文档和运行库许可，脱敏报告路径，复核 manifest、EXE 和每个运行文件字节一致，生成下载校验值。公开打包需要对应构建环境和有效原验收文件；它不会启动插件、连接设备或替代功能验收。
+tools/prepare_dghub_public_release.py 是硬编码 1.0.5 的历史公开包工具，不可直接用于 1.0.7。1.0.7 使用前述 tools/finalize_death_live_package.py 流程，配合对应版本的最终验收文件，脱敏记录并核对运行文件字节不变。已完成此流程的最终 ZIP 可原样上传，公开说明和校验值作为外部附件追加，不必重新封包；任何发布工具都不替代功能验收。

@@ -111,9 +111,14 @@ def main(argv=None, *, stop_event=None, status_sink=None, panel_theme="legacy"):
     w, h = cap.monitor_size
     hardware_enabled = (args.enable_trigger
                         and config.get("trigger", {}).get("sender_mode") == "dglab")
-    if config.get("hud") and (w, h) != (1920, 1080):
-        cap.close()
-        parser.error("HUD 档位模式仅支持完整的 1920×1080 抓屏，请停止后核对显示器")
+    if config.get("hud"):
+        expected = (config["hud"]["frame_width"], config["hud"]["frame_height"])
+        if (w, h) != expected:
+            cap.close()
+            parser.error("实际抓屏尺寸与本次 HUD 配置不符，请停止后核对显示器")
+        if expected != (1920, 1080) and config.get("calibration", {}).get("allow_experimental_high_resolution") != 1:
+            cap.close()
+            parser.error("实验性 2K／4K 适配尚未明确允许；请先在 HUD 设置中确认")
     if hardware_enabled:
         calibration_error = _hardware_calibration_error(config, (w, h))
         if calibration_error:
@@ -159,6 +164,7 @@ def main(argv=None, *, stop_event=None, status_sink=None, panel_theme="legacy"):
     panel_ready = False
     panel_controls_attempted = False
     last_topmost_refresh = -float("inf")
+    last_running_tick = None
 
     print("[runner_real] 进入战场后按 F8 或点击控制窗按钮启用；再次操作立即停止。")
     if args.no_global_escape:
@@ -200,19 +206,44 @@ def main(argv=None, *, stop_event=None, status_sink=None, panel_theme="legacy"):
                 # Always drain mouse intent, even when F8 also requests a change.
                 # A leftover STOP click must not become ARM on the next frame.
                 mouse_toggle_requested = panel_controller.consume_toggle()
+                hotkey_requested = hotkey_down and not hotkey_was_down
                 toggle_requested = (
-                    (hotkey_down and not hotkey_was_down)
+                    hotkey_requested
                     or mouse_toggle_requested
                 )
                 if toggle_requested:
-                    paused = not paused
+                    reset_challenge = bool(hotkey_requested and trigger is not None and getattr(trigger, "challenge_failed", False))
+                    paused = True if reset_challenge else not paused
                     panel_controller.cancel_pending()
                     pipeline.reset()
                     if trigger is not None:
-                        trigger.reset("paused" if paused else "resumed")
-                    stop_reason = "Manual stop (F8/button)" if paused else ""
+                        if reset_challenge:
+                            trigger.reset_challenge()
+                        else:
+                            trigger.reset("paused" if paused else "resumed")
+                    stop_reason = "Challenge reset; F8 to start" if reset_challenge else "Manual stop (F8/button)" if paused else ""
                     print(f"[runner_real] {'[SAFE LOCKED]' if paused else '[ARMED]'}")
                 hotkey_was_down = hotkey_down
+
+                # A returned frame after a stalled loop must not re-arm a
+                # continuous death lease. Recovery always needs local intent.
+                if not paused and last_running_tick is not None and t0 - last_running_tick > getattr(pipeline, "max_frame_gap", 1.0):
+                    paused = True
+                    panel_controller.cancel_pending()
+                    pipeline.reset()
+                    if trigger is not None:
+                        trigger.reset("frame_timeout")
+                    stop_reason = "Frame timeout; F8 to retry"
+                if not paused and hardware_enabled:
+                    from src.dglab_sender import is_paired
+                    if not is_paired():
+                        paused = True
+                        panel_controller.cancel_pending()
+                        pipeline.reset()
+                        if trigger is not None:
+                            trigger.reset("connection_lost")
+                        stop_reason = "APP disconnected; F8 after pairing"
+                last_running_tick = t0 if not paused else None
 
                 frame = cap.grab()
                 if ((hardware_enabled or config.get("hud")) and frame is not None
@@ -249,7 +280,17 @@ def main(argv=None, *, stop_event=None, status_sink=None, panel_theme="legacy"):
 
                     # 设备触发
                     if trigger is not None:
-                        outcome = trigger.dispatch(result)
+                        try:
+                            outcome = trigger.dispatch(result)
+                        except Exception:
+                            logger.exception("反馈发送异常，已暂停")
+                            outcome = {"reason": "sender_error"}
+                        if isinstance(outcome, dict) and outcome.get("reason") in {"continuous_rejected", "sender_error", "sender_rejected"}:
+                            paused = True
+                            panel_controller.cancel_pending()
+                            pipeline.reset()
+                            trigger.reset(outcome["reason"])
+                            stop_reason = "Output failed; F8 to retry"
                         event_count += int(bool(outcome and outcome.get("dispatched")))
 
                     # FPS
@@ -307,7 +348,11 @@ def main(argv=None, *, stop_event=None, status_sink=None, panel_theme="legacy"):
                         else:
                             snapshot = {"connected": False, "strengths": {"A": 0, "B": 0}}
                         status_sink(paused=paused, valid=bool(result.valid and not paused),
-                                    hp=result.health_stable, mode=mode, **snapshot)
+                                    hp=result.health_stable, mode=mode,
+                                    resolution=f"{w}x{h}",
+                                    hud_source=config.get("hud", {}).get("source", "legacy"),
+                                    hud_profile_version=config.get("hud", {}).get("version"),
+                                    **(trigger.death_status() if trigger is not None else {}), **snapshot)
                     except Exception:
                         logger.debug("UI status unavailable", exc_info=True)
 
@@ -322,6 +367,7 @@ def main(argv=None, *, stop_event=None, status_sink=None, panel_theme="legacy"):
                         compact=panel_controller.compact,
                         valid=result.valid,
                         theme=panel_theme,
+                        challenge_failed=bool(trigger is not None and getattr(trigger, "challenge_failed", False)),
                         output_mode=("HARDWARE" if hardware_enabled else
                                      "MOCK" if trigger is not None else "MONITOR"),
                     )
@@ -334,6 +380,7 @@ def main(argv=None, *, stop_event=None, status_sink=None, panel_theme="legacy"):
                                      "MOCK" if trigger is not None else "MONITOR"),
                         stop_reason=stop_reason,
                         theme=panel_theme,
+                        challenge_failed=bool(trigger is not None and getattr(trigger, "challenge_failed", False)),
                     )
                 cv2.imshow(PANEL_NAME, panel)
 

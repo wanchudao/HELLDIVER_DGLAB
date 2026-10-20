@@ -40,6 +40,8 @@ class HealthDetector:
     """血条分析器：列均值灰度 + 边界扫描。"""
 
     def __init__(self, config: dict):
+        from src.hud_profiles import pixel_units
+        self._unit = lambda pixels: pixel_units(config, pixels)
         feat = config["features"]
         self.filled_threshold = feat["gray_filled_threshold"]
         self.empty_threshold = feat["gray_empty_threshold"]
@@ -109,8 +111,10 @@ class HealthDetector:
         if len(scores) < 3:
             return scores
 
-        kernel = np.array([0.2, 0.6, 0.2], dtype=np.float32)
-        padded = np.pad(scores, (1, 1), mode="edge")
+        radius = self._unit(1)
+        kernel = np.zeros(radius * 2 + 1, dtype=np.float32)
+        kernel[0], kernel[radius], kernel[-1] = .2, .6, .2
+        padded = np.pad(scores, (radius, radius), mode="edge")
         return np.convolve(padded, kernel, mode="valid")
 
     # ── 边界查找 ───────────────────────────────────────
@@ -144,7 +148,7 @@ class HealthDetector:
             return self.bar_min_x, 0.0
 
         # 从左到右扫描，遇到连续 gap 列后截断
-        gap_tolerance = 4
+        gap_tolerance = self._unit(4)
         started = False
         gap_count = 0
         last_filled_rel = -1
@@ -181,8 +185,8 @@ class HealthDetector:
             # 抗锯齿/视频压缩会让同一边缘列在 .38 两侧持续摆动；其填充→
             # 空槽的主要下降边仍在原处。只在这几列内找最大下降边，真实
             # 的单像素边缘移动仍会完整保留，不增加 HP 变化量门槛。
-            start = max(0, filled_width - 2)
-            stop = min(effective_width - 1, filled_width + 3)
+            start = max(0, filled_width - self._unit(2))
+            stop = min(effective_width - 1, filled_width + self._unit(3))
             drops = effective_scores[start:stop] - effective_scores[start + 1:stop + 1]
             if len(drops) and np.max(drops) > 0:
                 filled_width = start + int(np.argmax(drops)) + 1
@@ -206,16 +210,17 @@ class HealthDetector:
         empty_mask = filled_scores <= self.empty_threshold
 
         # 一块右侧亮区也有极高分离度，但不是由左往右填充的血条。
-        if np.any(filled_mask) and not np.any(filled_mask[:4]):
+        if np.any(filled_mask) and not np.any(filled_mask[:self._unit(4)]):
             return 0.0
 
         # 连续空槽之后再出现填充不是一个左端连续的血条。
         # 与边界扫描共享 4 列 gap 容忍度，不能把背景亮块当成可靠零/低血。
-        if n >= 4:
+        gap = self._unit(4)
+        if n >= gap:
             empty_runs = np.flatnonzero(
-                np.convolve(empty_mask.astype(np.int8), np.ones(4, dtype=np.int8),
-                            mode="valid") == 4)
-            if len(empty_runs) and np.any(filled_mask[empty_runs[0] + 4:]):
+                np.convolve(empty_mask.astype(np.int8), np.ones(gap, dtype=np.int8),
+                            mode="valid") == gap)
+            if len(empty_runs) and np.any(filled_mask[empty_runs[0] + gap:]):
                 return 0.0
 
         n_filled = np.sum(filled_mask)

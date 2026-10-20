@@ -13,7 +13,7 @@ import time
 from dghub_plugin.offline_core import MockVisionSession
 from dghub_plugin.sdk_config import (HOST_CONFIG_KEYS, LEGACY_CONFIG_KEYS, WAVE_TO_EVENT, core_config,
                                      defaults, manifest, validate)
-from src.hud_profiles import PROFILE_VERSION, source_label
+from src.hud_profiles import RESOLUTION, source_label, validate_resolution
 
 
 def _reject_constant(_value):
@@ -52,13 +52,15 @@ class SDKSession:
     STRENGTH_REFRESH = .10
 
     def __init__(self, base_config, *, clock=None, log_writer=None, available_presets=None,
-                 preset_catalog=None):
+                 preset_catalog=None, require_capture_binding=False):
         self.base_config = base_config
         self.clock = clock or time.monotonic
         self.log_writer = log_writer
         self.available_presets = available_presets
         self.preset_catalog = preset_catalog
         self.catalog_fingerprint = None
+        self.require_capture_binding = require_capture_binding
+        self.capture_resolution = None
         self.phase = "new"
         self.generation = 0
         self.vision = None
@@ -115,7 +117,8 @@ class SDKSession:
         fields = {"display_status": display_status, "hp": self._last_hp,
                   "running": self.armed, "requested_a_pct": 0, "requested_b_pct": 0,
                   "settings_pending": self.pending is not None}
-        fields["output_ready"] = bool(self.settings and self._acknowledged and not self.activation_pending)
+        fields["output_ready"] = bool(self.settings and self.vision is not None and self.phase == "ready"
+                                      and self._acknowledged and not self.activation_pending)
         fields.update(recognition_running=self.armed, device_connected=self.device_connected,
                       device_output_enabled=self.device_output_enabled,
                       recognition_only=self.armed and not self.device_output_enabled,
@@ -124,9 +127,19 @@ class SDKSession:
         if self.settings is not None:
             scale = self.settings["hud_scale_percent"]
             fields.update(hud_scale=f"{scale / 100:.2f}", hud_scale_percent=scale,
-                          hud_source=source_label(scale), hud_profile_version=PROFILE_VERSION,
-                          resolution="1920x1080")
+                          hud_source=source_label(scale, self.capture_resolution) if self.capture_resolution else "等待实际抓屏尺寸",
+                          hud_profile_version=self.vision.config["hud"]["version"] if self.vision else None,
+                          capture_resolution=f"{self.capture_resolution[0]}x{self.capture_resolution[1]}" if self.capture_resolution else None,
+                          allow_experimental_high_resolution=self.settings["allow_experimental_high_resolution"],
+                          resolution=f"{self.capture_resolution[0]}x{self.capture_resolution[1]}" if self.capture_resolution else None)
             fields["low_health_threshold_percent"] = self.settings["low_health_threshold_percent"]
+            fields["death_feedback_mode"] = self.settings["death_feedback_mode"]
+            fields["panel_mode"] = self.settings["panel_mode"]
+        if self.vision is not None:
+            fields.update(self.vision.trigger.death_status())
+            fields["death_output_active"] = bool(self.device_output_enabled and fields["death_layer_active"]
+                and any(self._last_outputs[ch][0] > 0 and self.settings["death_pulse_strength" + ("_b" if ch == "B" else "")] > 0
+                        for ch in ("A", "B")))
         record_status = getattr(self.log_writer, "status", None)
         if record_status is not None:
             fields["session_record"] = record_status()
@@ -140,7 +153,7 @@ class SDKSession:
             {"key": "config", "title": "HUD 与反馈配置", "state": "ok" if self.settings else "pending",
              "detail": "配置已校验" if self.settings else "等待完整配置"},
             {"key": "hud", "title": "有效 HUD", "state": "ok" if self._last_hp is not None else "pending",
-             "detail": "血条已定位" if self._last_hp is not None else "等待 1920×1080 战场画面",
+             "detail": "血条已定位" if self._last_hp is not None else "等待所选分辨率的有效战场 HUD",
              "hint": "软件 HUD 档位需与游戏一致；F8 开始／暂停"},
         ]}
         return fields
@@ -212,16 +225,47 @@ class SDKSession:
                 "settings_pending": self.pending is not None,
                 "settings_note": "保险立即生效；其他设置停止并重启插件后生效"}},))
         self.settings = values
-        applied = core_config(self.base_config, values)
+        self._deadline = math.inf
+        if self.require_capture_binding:
+            self.phase = "capture"
+            return self.pause("waiting_capture_geometry")
+        return self.bind_capture_geometry(RESOLUTION)
+
+    def bind_capture_geometry(self, resolution):
+        """Bind one immutable core and one snapshot, before any arming/frame ticket.
+
+        Normal launch defers this until its selected capture worker reports size;
+        old offline callers retain explicit default 1080p initialization.
+        """
+        try:
+            resolution = validate_resolution(resolution)
+            if self.closed or self.settings is None:
+                return self._batch()
+            if self.capture_resolution is not None:
+                if resolution != self.capture_resolution:
+                    self.last_error = "Capture resolution changed; restart required"
+                    return self.close("capture_size_mismatch")
+                return self._batch()
+            if resolution != RESOLUTION and not self.settings["allow_experimental_high_resolution"]:
+                self.last_error = "请在 HUD 设置中确认实验性 2K／4K 适配；推算配置未实机验收"
+                return self.close("experimental_resolution_not_allowed")
+            return self._bind_core(resolution)
+        except Exception:
+            self.last_error = "Cannot bind actual capture geometry/configuration"
+            return self.close("capture_configuration_failed")
+
+    def _bind_core(self, resolution):
+        applied = core_config(self.base_config, self.settings, resolution)
         self.vision = MockVisionSession(applied,
                                        clock=self.clock, log_writer=self.log_writer)
+        self.capture_resolution = resolution
         record_config = getattr(self.log_writer, "configured", None)
         if record_config is not None:
-            record_config(values, applied)
+            record_config(self.settings, applied)
         self.phase = "ready"
         self._deadline = math.inf
         # Persisted legacy running is accepted but never controls a session.
-        return self.pause("output_safety_locked" if not values["output_allowed"] else "startup_paused")
+        return self.pause("output_safety_locked" if not self.settings["output_allowed"] else "startup_paused")
 
     def set_running(self, running):
         if type(running) is not bool:
@@ -245,6 +289,14 @@ class SDKSession:
         self.vision.set_running(True)
         return self._batch([{"op": "status", "fields": self.status_fields(
             "等待有效 HUD" if self.device_connected else "识别已启动；未连接设备，只识别不输出")}])
+
+    def local_toggle(self, source="button"):
+        if source == "hotkey" and self.vision is not None and self.vision.trigger.challenge_failed:
+            batch = self.pause("challenge_reset")
+            self.vision.reset_challenge()
+            return self._batch(tuple(json.loads(raw) for raw in batch.messages if json.loads(raw).get("op") != "status")
+                + ({"op": "status", "fields": self.status_fields("挑战已重置；再次 F8 开始")},))
+        return self.set_running(not self.armed)
 
     def receive(self, raw):
         if self.closed:

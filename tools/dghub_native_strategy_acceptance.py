@@ -23,6 +23,8 @@ import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 HOST_SHA256 = "86a6fd69060588631d023ae97bb3cb58370cd1cf898b8612c7c52a43a55301a2"
+VERIFIED_HOSTS = {HOST_SHA256: "1.9.6",
+    "4734915664f45476111ea1b7590024f396784af869f71086d721313fbe5a7dc5": "1.9.7"}
 NATIVE_ROOT_ENV = "HELLDIVER_NATIVE_STRATEGY_ROOT"
 REPORT_ENV = "HELLDIVER_NATIVE_STRATEGY_REPORT"
 SOURCE_UNITS = ("dghub_plugin/sdk_session.py", "dghub_plugin/sdk_transport.py", "dghub_plugin/preset_catalog.py")
@@ -43,7 +45,7 @@ def validate_report(report):
     """Validate evidence scope, not promote a method probe to host acceptance."""
     if not isinstance(report, dict) or report.get("status") != "observed":
         raise ValueError("Native strategy execution did not complete")
-    if report.get("host_exe_sha256", "").lower() != HOST_SHA256:
+    if report.get("host_exe_sha256", "").lower() not in VERIFIED_HOSTS:
         raise ValueError("Unverified native host build")
     flags = ("installed_host_modified", "installed_config_modified", "network_used",
              "physical_device_used", "native_gui_tested", "real_frozen_process_tested")
@@ -438,8 +440,8 @@ def run_native():
             or Path(sys.executable).parent.resolve()!=native_root
             or not native_root.is_relative_to((ROOT/"build").resolve())
             or not report_path.is_relative_to(native_root)
-            or sha256(sys.executable)!=HOST_SHA256):
-        raise RuntimeError("Only the owned DGHub 1.9.6 copy may run the native probe")
+            or sha256(sys.executable) not in VERIFIED_HOSTS):
+        raise RuntimeError("Only the owned inspected DGHub copy may run the native probe")
     fixture = Path(tempfile.mkdtemp(prefix="native_data_", dir=native_root))
     os.chdir(fixture)
     source_hashes = {name:sha256(ROOT/name) for name in SOURCE_UNITS}
@@ -454,6 +456,7 @@ def run_native():
     try:
         report = asyncio.run(guarded())
         report.update(host_exe_sha256=sha256(sys.executable), probe_source_sha256=probe_hash,
+            host_version=VERIFIED_HOSTS[sha256(sys.executable)],
             implementation_source_sha256=source_hashes,
             source_unchanged_during_probe=source_hashes=={name:sha256(ROOT/name) for name in SOURCE_UNITS})
         report = verify_standard(report)
@@ -472,12 +475,13 @@ def launch(report_path, *, host=None, timeout=40):
     native_root.mkdir(parents=True, exist_ok=True)
     local = os.environ.get("LOCALAPPDATA", "")
     host = Path(host or Path(local)/"Programs/DGHub/DGLab-Console.exe").resolve()
-    if sha256(host)!=HOST_SHA256 or not (host.parent/"_internal").is_dir():
-        raise ValueError("Expected the inspected DGHub 1.9.6 installation")
+    host_hash = sha256(host)
+    if host_hash not in VERIFIED_HOSTS or not (host.parent/"_internal").is_dir():
+        raise ValueError("Expected an inspected DGHub installation")
     isolated = native_root/"DGLab-Console.exe"
     library = native_root/"_internal"
     if isolated.exists() or library.exists():
-        if (not isolated.is_file() or sha256(isolated)!=HOST_SHA256
+        if (not isolated.is_file() or sha256(isolated)!=host_hash
                 or not library.is_dir() or library.resolve()!=(host.parent/"_internal").resolve()):
             raise FileExistsError("Existing runner is not the verified owned fixture")
     else:

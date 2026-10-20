@@ -6,14 +6,14 @@ from src import hud_settings as settings
 def test_missing_settings_preserve_legacy_without_writing(tmp_path):
     path = tmp_path / "hud_settings.ini"
     store = settings.HudSettingsStore(path)
-    assert store.snapshot() == {"mode": "legacy", "scale_percent": 100}
+    assert store.snapshot() == settings.default_settings()
     assert not path.exists()
 
 
 @pytest.mark.parametrize("scale", range(75, 126, 5))
 def test_all_eleven_exact_steps_roundtrip_without_float_arithmetic(tmp_path, scale):
     path = tmp_path / "hud_settings.ini"
-    values = {"mode": "manual", "scale_percent": scale}
+    values = {"mode": "manual", "scale_percent": scale, settings.EXPERIMENTAL_KEY: False}
     store = settings.HudSettingsStore(path)
     assert store.save(values) == values
     restored = settings.HudSettingsStore(path)
@@ -21,7 +21,7 @@ def test_all_eleven_exact_steps_roundtrip_without_float_arithmetic(tmp_path, sca
     copy = restored.snapshot()
     copy["scale_percent"] = 100
     assert restored.snapshot() == values
-    assert "schema_version = 1" in path.read_text(encoding="utf-8")
+    assert "schema_version = 2" in path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("bad", [74, 76, 126, True, False, 100.0, 1.0, "100", "1.00", None])

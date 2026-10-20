@@ -23,7 +23,8 @@ def normalized(code):
         normalized(value) if isinstance(value,CodeType) else value for value in code.co_consts))
 
 
-def package(folder,destination,report_prefix='main_final',date='2026-09-13',python_tests=498):
+def package(folder,destination,report_prefix='main_final',date='2026-09-13',python_tests=498,
+            acceptance_document=None,screenshot_directory=None):
     folder=folder.resolve()
     destination=destination.resolve()
     exe=folder/'HELLDIVER_Main.exe'
@@ -38,6 +39,8 @@ def package(folder,destination,report_prefix='main_final',date='2026-09-13',pyth
         sources['tools.main_feedback_acceptance']=ROOT/'tools/main_feedback_acceptance.py'
     if 'tools.main_threshold_acceptance' in modules:
         sources['tools.main_threshold_acceptance']=ROOT/'tools/main_threshold_acceptance.py'
+    if 'tools.main_death_acceptance' in modules:
+        sources['tools.main_death_acceptance']=ROOT/'tools/main_death_acceptance.py'
     if 'src.panel_window' in modules:
         sources['tools.panel_acceptance']=ROOT/'tools/panel_acceptance.py'
     if 'src.hud_profiles' in modules:
@@ -47,6 +50,9 @@ def package(folder,destination,report_prefix='main_final',date='2026-09-13',pyth
         sources['tools.main_firewall_acceptance']=ROOT/'tools/main_firewall_acceptance.py'
     if 'src.desktop_view' in modules:
         sources['tools.main_theme_acceptance']=ROOT/'tools/main_theme_acceptance.py'
+    for name in ('tools.resolution_acceptance', 'tools.resolution_fixtures'):
+        if name in modules:
+            sources[name]=ROOT.joinpath(*name.split('.')).with_suffix('.py')
     for name,path in sources.items():
         if not path.is_file(): path=path.with_suffix('')/'__init__.py'
         raw=extract('desktop_app') if name=='desktop_app' else extract_module(name)
@@ -98,6 +104,10 @@ def package(folder,destination,report_prefix='main_final',date='2026-09-13',pyth
         assert reports['threshold']['full_preference_trigger_protocol_chain']
         assert reports['threshold']['final_both_zero'] and reports['threshold']['no_late_output']
         assert len(reports['threshold']['checks'])==8
+    if 'tools.main_death_acceptance' in modules:
+        reports['death']=json.loads((ROOT/'build'/f'{report_prefix}_death_{stamp}.json').read_text(encoding='utf-8'))
+        assert reports['death']['full_preferences_trigger_protocol_chain'] and reports['death']['final_both_zero']
+        assert reports['death']['no_late_output'] and len(reports['death']['checks'])==3
     if 'src.hud_profiles' in modules:
         reports['hud']=json.loads((ROOT/'build'/f'{report_prefix}_hud_{stamp}.json').read_text(encoding='utf-8'))
         assert reports['selfcheck']['hud_settings'] is True
@@ -151,6 +161,22 @@ def package(folder,destination,report_prefix='main_final',date='2026-09-13',pyth
         assert any(item['mode']=='session_active' and item['decoration_ticks']==0 for item in reports['theme']['performance'])
         assert reports['theme']['software_telemetry_injected'] is True
     assert all(report['status']=='ok' for report in reports.values())
+    if 'tools.resolution_acceptance' in modules:
+        resolution_paths={name:ROOT/'build'/f'{report_prefix}_{name}_{stamp}.json'
+                          for name in ('resolution','resolution_protocol_1440','resolution_protocol_2160')}
+        for name,path in resolution_paths.items():
+            record=json.loads(path.read_text(encoding='utf-8'))
+            if (record.get('status')!='ok' or record.get('frozen') is not True
+                    or record.get('exe_sha256')!=hashlib.sha256(exe.read_bytes()).hexdigest()
+                    or record.get('physical_device_used') is not False):
+                raise RuntimeError('Missing/mismatched final resolution evidence: '+name)
+            if name=='resolution':
+                assert record['profile_combinations']==33 and len(record['synthetic_cross_checks'])==363
+                assert len(record['resampled_photo_checks'])==154 and record['high_resolution_real_game_tested'] is False
+            else:
+                assert record['full_vision_preferences_protocol_chain'] and record['final_both_zero']
+                assert record['no_late_output'] and len(record['checks'])==3
+            reports[name]=record
     dependencies={name:importlib.metadata.version(name) for name in
                   ('numpy','opencv-python','mss','websocket-client','qrcode','Pillow')}
     dependencies['node']=subprocess.check_output([str(internal/'runtime/node.exe'),'--version'],text=True).strip()
@@ -167,9 +193,10 @@ def package(folder,destination,report_prefix='main_final',date='2026-09-13',pyth
         source_name=('main_ui_acceptance_20261010.md' if 'src.desktop_view' in modules else
                      'threshold_acceptance_20261010.md' if 'tools.main_threshold_acceptance' in modules else
                      'main_firewall_acceptance_20261007.md' if 'src.firewall_access' in modules else 'main_hud_acceptance_20261002.md')
-        shutil.copyfile(ROOT/'docs'/source_name,acceptance)
+        shutil.copyfile(Path(acceptance_document) if acceptance_document else ROOT/'docs'/source_name,acceptance)
         acceptance_files.append(acceptance)
     info={'edition':'main-official-backend','date':date,'entry':'HELLDIVER_Main.exe',
+          'version':'v1.0.0 Beta 3' if 'tools.resolution_acceptance' in modules else 'v1.0.0 Beta 2',
           'exe_sha256':hashlib.sha256(exe.read_bytes()).hexdigest(),'frozen_source_verified':checked,
           'python_tests_passed':python_tests,'node_tests_passed':16,'dependencies':dependencies,
           'checks':reports,'physical_device_tested':False,'user_phone_app_tested':False}
@@ -181,7 +208,7 @@ def package(folder,destination,report_prefix='main_final',date='2026-09-13',pyth
         preview_dir=folder/'界面截图'
         preview_dir.mkdir(exist_ok=True)
         for name in ('main_window.png','hud_saved.png','guide_page.png','control_panel.png','island.png'):
-            source=ROOT/'build/ui_cuttingedge_20261010/final_theme'/name
+            source=(Path(screenshot_directory) if screenshot_directory else ROOT/'build/ui_cuttingedge_20261010/final_theme')/name
             target=preview_dir/name
             shutil.copyfile(source,target)
             files.append(target)
@@ -207,5 +234,8 @@ if __name__=='__main__':
     parser.add_argument('--report-prefix',default='main_final')
     parser.add_argument('--date',default='2026-09-13')
     parser.add_argument('--python-tests',type=int,default=498)
+    parser.add_argument('--acceptance-document',type=Path)
+    parser.add_argument('--screenshots',type=Path)
     args=parser.parse_args()
-    print(json.dumps(package(args.folder,args.zip,args.report_prefix,args.date,args.python_tests),indent=2))
+    print(json.dumps(package(args.folder,args.zip,args.report_prefix,args.date,args.python_tests,
+                             args.acceptance_document,args.screenshots),indent=2))

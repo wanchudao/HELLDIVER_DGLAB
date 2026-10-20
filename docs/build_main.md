@@ -36,6 +36,8 @@ npm ci --prefix official_v2/socket/v2/backend
 npm test --prefix official_v2/socket/v2/backend -- --runInBand
 ```
 
-测试默认阻断真实设备连接。仓库包含 HUD 照片和已有原始图片，MP4 文件、私人配置及原生 DGHub 安装不上传；缺少原 MP4 时对应测试会明确跳过，不代表视频通过。2023 项全部通过是发布机具有原始素材时的记录，不承诺干净克隆每台机器具有相同测试数。
+测试默认阻断真实设备连接。仓库包含 HUD 照片和已有原始图片，MP4 文件、私人配置及原生 DGHub 安装不上传；缺少原 MP4 时对应测试会明确跳过，不代表视频通过。Beta 1 的 2023 项、Beta 3 追加复测的 2353 项全部通过均是发布机具有原始素材时的记录，不承诺干净克隆每台机器具有相同测试数；后续发布工具测试也可能改变总数。
 
 tools/package_main_release.py 需要对应最终 EXE 的完成验收报告，并校验冻结代码与源码，不能用别的版本报告代替。tools/prepare_public_release.py 在不改变已测 EXE／Node 的前提下补充许可证与脱敏公开报告。仓库不会附带用户的本地发布报告；要重新发布应自行重跑最终 EXE 验收，不能只调用打包命令冒充验证。
+
+Beta 3 还要求同一 EXE 的 33 组分辨率／HUD 配置报告，以及 1440p、2160p 的“原像素合成输入→识别→反馈→软件 APP”协议报告。可用 tools/run_death_live_validation.py 的 --resolution-only 执行，有独立进程硬超时；超时不算通过。多分辨率及死亡／直播版本最终用 tools/finalize_death_live_package.py 补齐离线许可证、脱敏记录并核对运行文件字节不变，不调用历史版本的自动发布命令。

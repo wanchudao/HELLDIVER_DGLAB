@@ -31,7 +31,7 @@ def popup(kind, scale):
         window.mainloop()
         return 0
     window.withdraw()
-    paths = filedialog.askopenfilenames(parent=window, title="选择原始 1920×1080 截图（不缩放）",
+    paths = filedialog.askopenfilenames(parent=window, title="选择原始截图：1080p／1440p／4K（不缩放）",
                                        filetypes=[("游戏截图", "*.png *.jpg *.jpeg *.bmp")])
     if not paths:
         window.destroy()
@@ -68,7 +68,7 @@ async def run_host(environment, *, capture_factory=None, ui=None, capture_source
     code = None
     try:
         session = SDKSession(load_config(ROOT / "config.example.ini"), log_writer=recorder,
-                             available_presets=frozenset())
+                             available_presets=frozenset(), require_capture_binding=True)
         driver = LiveDriver(capture_factory=capture_factory, ui=ui)
         transport = DGHubTransport(session, environment, driver=driver, catalog_loader=fetch_catalog_snapshot)
         code = await transport.run()
@@ -85,11 +85,14 @@ async def run_host(environment, *, capture_factory=None, ui=None, capture_source
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="HELLDIVER DGHub · 1080p 可调 HUD")
+    parser = argparse.ArgumentParser(description="HELLDIVER DGHub · 多分辨率可调 HUD")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--popup-guide", action="store_true")
     group.add_argument("--popup-check", action="store_true")
+    group.add_argument("--check-live-panel", action="store_true", help="Own-window UI acceptance; no SDK/device")
     group.add_argument("--inspect-images", nargs="+", type=Path)
+    group.add_argument("--check-resolution", action="store_true")
+    parser.add_argument("--hud-samples", type=Path)
     group.add_argument("--software-host-test", action="store_true",
                        help="开发用模拟宿主接入；未进行正式宿主输出验收")
     group.add_argument("--software-replay-test", type=Path,
@@ -97,6 +100,28 @@ def main(argv=None):
     parser.add_argument("--hud-scale", type=int, default=100, choices=range(75, 126, 5))
     parser.add_argument("--report", type=Path)
     args = parser.parse_args(argv)
+    if args.check_resolution:
+        from tools.resolution_acceptance import run
+        from dghub_plugin.diagnostics import inspect_images
+        from dghub_plugin.sdk_config import defaults
+        from src.config_loader import load_config
+        config = load_config(ROOT / "config.example.ini")
+        report = run(lambda paths, scale: inspect_images(paths, defaults() | {"hud_scale_percent":scale}, config),
+                     samples=args.hud_samples, edition="dghub")
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return 0
+    if args.check_live_panel:
+        from tools.live_panel_acceptance import run
+        report = run()
+        import hashlib
+        report["exe_sha256"] = hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest() if getattr(sys, "frozen", False) else None
+        report["frozen"] = bool(getattr(sys, "frozen", False))
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return 0
     if args.popup_guide or args.popup_check:
         return popup("guide" if args.popup_guide else "check", args.hud_scale)
     if args.inspect_images:
