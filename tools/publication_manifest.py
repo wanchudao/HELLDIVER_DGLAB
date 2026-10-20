@@ -27,7 +27,10 @@ def source_files():
     files.update(path.relative_to(ROOT).as_posix() for path in (ROOT/'packaging/backend').glob('*.json'))
     for name in ('main_official_guide.md', 'main_ui_upgrade_20261010.md', 'main_ui_acceptance_20261010.md',
                  'waveform_sources.md', 'third_party_notices.md', 'build_main.md', 'build_dghub.md',
-                 'calibration_guide.md', 'dghub_plugin_guide.md'):
+                 'calibration_guide.md', 'dghub_plugin_guide.md',
+                 'threshold_acceptance_20261010.md', 'death_live_acceptance_20261014.md',
+                 'death_live_testing_20261014.md', 'resolution_acceptance_20261017.md',
+                 'resolution_testing_20261017.md', 'postgame_retest_20261018.md'):
         files.add('docs/'+name)
     for folder in ('docs/images', 'docs/releases'):
         files.update(path.relative_to(ROOT).as_posix() for path in (ROOT/folder).glob('*') if path.is_file())

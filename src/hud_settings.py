@@ -7,23 +7,28 @@ import tempfile
 from src.hud_profiles import SCALES
 
 SETTING_KEYS = {"mode", "scale_percent"}
-SCHEMA_VERSION = 1
+EXPERIMENTAL_KEY = "allow_experimental_high_resolution"
+SCHEMA_VERSION = 2
 
 
 def default_settings():
-    return {"mode": "legacy", "scale_percent": 100}
+    return {"mode": "legacy", "scale_percent": 100, EXPERIMENTAL_KEY: False}
 
 
 def validate_settings(values):
-    if not isinstance(values, dict) or set(values) != SETTING_KEYS:
-        raise ValueError("HUD 设置需要且只能包含 mode 和 scale_percent")
+    if (not isinstance(values, dict) or not SETTING_KEYS <= set(values)
+            or not set(values) <= SETTING_KEYS | {EXPERIMENTAL_KEY}):
+        raise ValueError("HUD 设置字段缺失或未知")
     mode = values["mode"]
     if not isinstance(mode, str) or mode not in ("legacy", "manual"):
         raise ValueError("HUD 模式必须为 legacy 或 manual")
     scale = values["scale_percent"]
     if type(scale) is not int or scale not in SCALES:
         raise ValueError("HUD 大小必须为 0.75–1.25，每档 +0.05（整数 75–125）")
-    return {"mode": mode, "scale_percent": scale}
+    experimental = values.get(EXPERIMENTAL_KEY, False)
+    if type(experimental) is not bool:
+        raise ValueError("实验性高分辨率设置必须为布尔值")
+    return {"mode": mode, "scale_percent": scale, EXPERIMENTAL_KEY: experimental}
 
 
 def load_settings(path):
@@ -40,10 +45,16 @@ def load_settings(path):
         if cp.sections() != ["hud"] or cp.defaults():
             raise ValueError("HUD 设置需要且只能包含 [hud]")
         section = dict(cp["hud"])
-        if set(section) != SETTING_KEYS | {"schema_version"}:
-            raise ValueError("HUD 设置字段不完整或包含不支持的字段")
-        if section.pop("schema_version") != str(SCHEMA_VERSION):
+        version = section.pop("schema_version", None)
+        expected_keys = SETTING_KEYS if version == "1" else SETTING_KEYS | {EXPERIMENTAL_KEY}
+        if version not in {"1", str(SCHEMA_VERSION)}:
             raise ValueError("不支持的 HUD 设置版本")
+        if set(section) != expected_keys:
+            raise ValueError("HUD 设置字段不完整或包含不支持的字段")
+        if version != "1":
+            if section[EXPERIMENTAL_KEY] not in {"0", "1"}:
+                raise ValueError("实验性高分辨率设置必须为 0 或 1")
+            section[EXPERIMENTAL_KEY] = section[EXPERIMENTAL_KEY] == "1"
         scale_text = section["scale_percent"]
         if not scale_text.isascii() or not scale_text.isdecimal():
             raise ValueError("HUD scale_percent 必须为整数 75–125，每档 +5")
@@ -58,6 +69,7 @@ def save_settings(path, values):
     cp = configparser.ConfigParser(interpolation=None)
     cp["hud"] = {"schema_version": str(SCHEMA_VERSION),
                  **{key: str(value) for key, value in validated.items()}}
+    cp["hud"][EXPERIMENTAL_KEY] = "1" if validated[EXPERIMENTAL_KEY] else "0"
     path = Path(path)
     temporary = None
     try:

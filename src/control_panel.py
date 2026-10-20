@@ -111,10 +111,12 @@ def draw_control_panel(
     compact: bool = False,
     valid: bool = True,
     theme: str = "legacy",
+    challenge_failed: bool = False,
 ) -> np.ndarray:
     """Render the complete safety control panel as a BGR image."""
     if compact:
-        return draw_island(paused=paused, health=health_stable, valid=valid, theme=theme)
+        return draw_island(paused=paused, health=health_stable, valid=valid, theme=theme,
+                           challenge_failed=challenge_failed)
     panel = np.full((PANEL_H, PANEL_W, 3), BACKGROUND, dtype=np.uint8)
     cv2.rectangle(panel, (0, 0), (PANEL_W - 1, PANEL_H - 1), PANEL_EDGE, 1)
 
@@ -132,7 +134,7 @@ def draw_control_panel(
     cv2.rectangle(panel, (12, 36), (PANEL_W - 12, 76), status_edge, 2)
     _centered_text(
         panel,
-        "SAFE - OUTPUT LOCKED" if paused else "ARMED - BATTLE MODE",
+        "CHALLENGE FAILED" if challenge_failed else "SAFE - OUTPUT LOCKED" if paused else "ARMED - BATTLE MODE",
         63, 0.62, WHITE, 2,
     )
 
@@ -143,7 +145,8 @@ def draw_control_panel(
     cv2.rectangle(panel, (x1, y1), (x2, y2), button_edge, 2)
     _centered_text(
         panel,
-        "ARM FOR BATTLE  [F8]" if paused else "STOP OUTPUT NOW  [F8]",
+        ("RESUME PENALTY" if paused else "PAUSE PENALTY") if challenge_failed
+        else "ARM FOR BATTLE  [F8]" if paused else "STOP OUTPUT NOW  [F8]",
         124, 0.56, WHITE, 2,
     )
 
@@ -175,20 +178,20 @@ def draw_control_panel(
     cv2.rectangle(panel, ISLAND_BUTTON[:2], ISLAND_BUTTON[2:], BLUE_DARK, -1)
     cv2.putText(panel, "ISLAND  [-]", (28, 234),
                 cv2.FONT_HERSHEY_SIMPLEX, .37, WHITE, 1, cv2.LINE_AA)
-    cv2.putText(panel, "F8  START / STOP", (167, 234),
+    cv2.putText(panel, "F8 RESET + PAUSE" if challenge_failed else "F8  START / STOP", (167, 234),
                 cv2.FONT_HERSHEY_SIMPLEX, .35, MUTED, 1, cv2.LINE_AA)
     return _theme_panel(panel) if theme == "cutting_edge" else panel
 
 
-def draw_island(*, paused, health=0.0, valid=True, theme="legacy"):
+def draw_island(*, paused, health=0.0, valid=True, theme="legacy", challenge_failed=False):
     """Compact pill; background is clipped to a rounded region on Windows."""
     panel = np.full((ISLAND_H, ISLAND_W, 3), BACKGROUND, np.uint8)
     color = MUTED if paused else SAFE if valid else (45, 185, 225)
     cv2.circle(panel, (22, 28), 5, color, -1, cv2.LINE_AA)
-    title = "PAUSED" if paused else "LIVE" if valid else "NO HUD"
+    title = "FAILED" if challenge_failed else "PAUSED" if paused else "LIVE" if valid else "NO HUD"
     cv2.putText(panel, title, (38, 26), cv2.FONT_HERSHEY_SIMPLEX,
                 .44, WHITE, 1, cv2.LINE_AA)
-    cv2.putText(panel, "F8 START / STOP", (38, 43), cv2.FONT_HERSHEY_SIMPLEX,
+    cv2.putText(panel, "F8 RESET + PAUSE" if challenge_failed else "F8 START / STOP", (38, 43), cv2.FONT_HERSHEY_SIMPLEX,
                 .26, MUTED, 1, cv2.LINE_AA)
     hp = f"{max(0.0, min(1.0, float(health))):.0%}" if valid and not paused else "--"
     cv2.putText(panel, "HP " + hp, (137, 33), cv2.FONT_HERSHEY_SIMPLEX,
@@ -277,8 +280,15 @@ def panel_window_closed(window_title: str = PANEL_NAME) -> bool:
 def update_panel_layout(controller, window_title=PANEL_NAME):
     if sys.platform == "win32":
         from src.panel_window import update_layout
-        size = (ISLAND_W, ISLAND_H) if controller.compact else (PANEL_W, PANEL_H)
-        update_layout(window_title, controller.compact, size)
+        live = getattr(controller, "live_small", False)
+        size = ((controller.live_size, controller.live_size) if live
+                else (ISLAND_W, ISLAND_H) if controller.compact else (PANEL_W, PANEL_H))
+        if getattr(controller, "live_mode", False):
+            update_layout(window_title, live or controller.compact, size,
+                          kind="live" if live else "island" if controller.compact else "full",
+                          monitor_bounds=controller.monitor_bounds)
+        else:
+            update_layout(window_title, controller.compact, size)
 
 
 def release_panel_controls(window_title=PANEL_NAME):

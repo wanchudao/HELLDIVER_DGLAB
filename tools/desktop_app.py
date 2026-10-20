@@ -118,7 +118,7 @@ def self_check():
         if hud_store.snapshot()["mode"] != "legacy":
             raise RuntimeError("Legacy HUD compatibility check failed")
         for scale in SCALES:
-            settings = {"mode":"manual","scale_percent":scale}
+            settings = {"mode":"manual","scale_percent":scale,"allow_experimental_high_resolution":False}
             hud_store.save(settings)
             restored = HudSettingsStore(hud_store.path).snapshot()
             if restored != settings:
@@ -164,13 +164,19 @@ def inspect_images(paths, *, hud_settings=None):
             frame=cv2.imdecode(np.frombuffer(encoded,dtype=np.uint8),cv2.IMREAD_COLOR)
             if frame is None: raise ValueError(f'无法读取截图：{path.name}')
             height,width=frame.shape[:2]
+            from src.hud_profiles import SUPPORTED_RESOLUTIONS, source_label, get_profile
+            supported = (width, height) in SUPPORTED_RESOLUTIONS
+            if manual and supported:
+                profile = get_profile(hud_settings["scale_percent"], (width, height))
             record = {'file':path.name, 'path':str(path.resolve()),
                       'sha256':hashlib.sha256(encoded).hexdigest(),
                       'resolution':f'{width}x{height}',
                       'hud_scale':hud_settings["scale_percent"] if manual else None,
-                      'hud_source':source_label(hud_settings["scale_percent"]) if manual else "旧版兼容预设",
-                      'source':profile["hud"]["source"] if manual else "legacy"}
-            if manual and (width,height) != (1920,1080):
+                      'hud_source':source_label(hud_settings["scale_percent"], (width,height)) if manual and supported else "旧版兼容预设" if not manual else "不支持的分辨率",
+                      'source':profile["hud"]["source"] if manual and supported else "legacy",
+                      'profile_version':profile["hud"]["version"] if manual and supported else None,
+                      'base_source':profile["hud"].get("base_source", profile["hud"]["source"]) if manual and supported else None}
+            if manual and not supported:
                 record.update(health_raw=None, confidence=0., anchor_score=0., hud_valid=False,
                               first_frame_valid=False, first_frame_reason="resolution_mismatch",
                               reject_reason="resolution_mismatch", outer_coords=None,
@@ -178,7 +184,7 @@ def inspect_images(paths, *, hud_settings=None):
                 records.append(record)
                 continue
             config=make_config(Path(folder)/f'{index}.ini',1,(width,height),'mock',
-                               hud_settings=hud_settings)
+                               hud_settings=hud_settings, preview=True)
             cfg = load_config(config)
             result,roi,health=VisionPipeline(cfg).process(frame,timestamp=0)
             record.update({'health_raw':float(health.health_raw),
@@ -268,7 +274,8 @@ def launch(*, on_ready=None):
             else:
                 from src.hud_profiles import source_label
                 percent = self.hud_store.values["scale_percent"]
-                self.hud_hint.set(f"HUD {percent/100:.2f} · 1920×1080 · {source_label(percent)}")
+                experiment = " · 2K/4K 推算已允许" if self.hud_store.values.get("allow_experimental_high_resolution") else " · 2K/4K 默认关闭"
+                self.hud_hint.set(f"HUD {percent/100:.2f} · 1080p {source_label(percent)}{experiment}")
 
         def open_hud_settings(self):
             self.view.navigate('HUD 设置')
@@ -551,9 +558,11 @@ def main(argv=None):
     parser.add_argument("--self-check",action="store_true")
     parser.add_argument("--check-images",type=Path,nargs='+')
     parser.add_argument("--hud-scale",choices=[f"{p/100:.2f}" for p in range(75,126,5)],
-                        help="HUD size for image checks; exact 0.05 steps at 1920x1080")
+                        help="HUD size for image checks; exact 0.05 steps, resolution from image pixels")
     parser.add_argument("--check-hud",action="store_true")
     parser.add_argument("--check-hud-ui",action="store_true")
+    parser.add_argument("--check-resolution", action="store_true", help="Synthetic/derived multi-resolution checks; no capture or APP")
+    parser.add_argument("--check-resolution-protocol", choices=("2560x1440","3840x2160"), help="Owned software APP with synthetic pixel input")
     parser.add_argument('--check-theme', action='store_true', help='Opt-in own-window theme checks; no game or device')
     parser.add_argument("--check-firewall",action="store_true",
                         help="Readonly bundled path, rule state, script syntax and Windows API checks; no UAC")
@@ -563,6 +572,7 @@ def main(argv=None):
                         help="Opt-in localhost software APP acceptance; never connects to the user's APP")
     parser.add_argument("--check-threshold", action="store_true",
                         help="Opt-in threshold preferences to loopback software APP; no physical device")
+    parser.add_argument("--check-death", action="store_true", help="Opt-in death modes against owned software APP only")
     parser.add_argument("--check-panel", action="store_true",
                         help="Opt-in own-window focus acceptance; no capture or device connection")
     parser.add_argument("--interactive-panel", action="store_true")
@@ -575,10 +585,20 @@ def main(argv=None):
         if not args.session:
             parser.error("worker requires session directory")
         return run_worker(args.worker,args.session)
-    if args.self_check or args.check_images or args.check_feedback or args.check_threshold or args.check_panel or args.check_hud or args.check_hud_ui or args.check_firewall or args.check_theme:
-        if args.check_theme:
+    if args.self_check or args.check_images or args.check_feedback or args.check_threshold or args.check_death or args.check_panel or args.check_hud or args.check_hud_ui or args.check_firewall or args.check_theme or args.check_resolution or args.check_resolution_protocol:
+        if args.check_resolution_protocol:
+            from tools.main_death_acceptance import run
+            result = run(resolution=tuple(map(int,args.check_resolution_protocol.split('x'))),frame_input=True)
+        elif args.check_resolution:
+            from tools.resolution_acceptance import run
+            result = run(lambda paths, scale: inspect_images(paths, hud_settings={"mode":"manual","scale_percent":scale}),
+                         samples=args.hud_samples, edition="main")
+        elif args.check_theme:
             from tools.main_theme_acceptance import run
             result = run(launch, args.ui_screenshots)
+        elif args.check_death:
+            from tools.main_death_acceptance import run
+            result = run()
         elif args.check_threshold:
             from tools.main_threshold_acceptance import run
             result = run()
@@ -606,6 +626,7 @@ def main(argv=None):
             result=inspect_images(args.check_images,hud_settings=hud) if args.check_images else self_check()
         content=json.dumps(result,ensure_ascii=False,indent=2)
         if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(content,encoding="utf-8")
         if sys.stdout is not None:
             print(content)

@@ -24,21 +24,25 @@ def backend_paths():
     return Path(node), ROOT / "official_v2/socket/v2/backend/src/managed.js"
 
 
-def validate_display(size, hud_settings=None):
+def validate_display(size, hud_settings=None, *, preview=False):
     """Validate before starting a backend or creating a session."""
     from src.hud_settings import validate_settings
     settings = validate_settings(hud_settings) if hud_settings is not None else None
     width, height = size
     if settings is not None and settings["mode"] == "manual":
-        if (width, height) != (1920, 1080):
-            raise ValueError("HUD 档位模式仅支持完整的 1920×1080 画面；不会自动缩放。")
+        from src.hud_profiles import RESOLUTION, validate_resolution
+        validate_resolution(size)
+        if tuple(size) != RESOLUTION and not preview and not settings["allow_experimental_high_resolution"]:
+            raise ValueError("请停止全部，在 HUD 设置中明确开启实验性 2K／4K 适配；推算配置未实机验收。")
+    elif settings is not None and tuple(size) in {(2560, 1440), (3840, 2160)} and not preview:
+        raise ValueError("高分辨率会话请明确选择游戏 HUD 档位，不可使用旧版兼容预设。")
     elif width < 640 or height < 360 or abs(width / height - 16 / 9) > .01:
         raise ValueError("当前内置预设支持 16:9；请先将游戏/显示器设为 1920×1080。")
     return settings
 
 
 def make_config(destination, monitor, size, mode, port=9999, *, qr_host=None, feedback_settings=None,
-                hud_settings=None, trigger_settings=None):
+                hud_settings=None, trigger_settings=None, preview=False):
     """Use the verified 1080p sample preset, not a falsely enlarged manual box."""
     width, height = size
     if feedback_settings is not None:
@@ -49,13 +53,15 @@ def make_config(destination, monitor, size, mode, port=9999, *, qr_host=None, fe
         trigger_settings = validate_trigger_settings(trigger_settings)
     if mode not in {"mock", "dglab"} or monitor < 1:
         raise ValueError("Invalid display or connection mode")
-    hud_settings = validate_display(size, hud_settings)
+    if preview and mode != "mock":
+        raise ValueError("截图预览只允许 Mock，不允许真实发送")
+    hud_settings = validate_display(size, hud_settings, preview=preview)
     cp = configparser.ConfigParser()
     with (ROOT / "config.example.ini").open(encoding="utf-8-sig") as stream:
         cp.read_file(stream)
     if hud_settings is not None and hud_settings["mode"] == "manual":
         from src.hud_profiles import get_profile
-        profile = get_profile(hud_settings["scale_percent"])
+        profile = get_profile(hud_settings["scale_percent"], (width, height))
         cp["ROI"] = {key: str(value) for key, value in profile["roi"].items()}
         cp["hud"] = {key: str(value) for key, value in profile["hud"].items()}
     else:
@@ -73,10 +79,12 @@ def make_config(destination, monitor, size, mode, port=9999, *, qr_host=None, fe
     cp["calibration"]["resolution"] = f"{width}x{height}"
     cp["calibration"]["source"] = "provided_1080p_screenshot_preset"
     if cp.has_section("hud"):
-        cp["calibration"]["source"] = "hud_1080p_" + cp["hud"]["source"]
+        cp["calibration"]["source"] = ("hud_1080p_" if (width, height) == (1920, 1080) else "hud_") + cp["hud"]["source"]
+        cp["calibration"]["allow_experimental_high_resolution"] = str(int(hud_settings["allow_experimental_high_resolution"]))
     cp["trigger"]["sender_mode"] = mode
     if trigger_settings is not None:
         cp["trigger"]["low_health_hp_threshold"] = str(trigger_settings["low_health_threshold_percent"] / 100)
+        cp["trigger"]["death_feedback_mode"] = trigger_settings["death_feedback_mode"]
     cp["sender"]["ws_host"] = "127.0.0.1"
     cp["sender"]["ws_port"] = str(port)
     if feedback_settings is not None:

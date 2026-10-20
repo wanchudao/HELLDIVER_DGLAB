@@ -2,7 +2,8 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 
-from src.feedback_settings import EVENTS, default_settings, default_trigger_settings, THRESHOLD_KEY
+from src.feedback_settings import (EVENTS, default_settings, default_trigger_settings, THRESHOLD_KEY,
+                                   DEATH_MODE_KEY, DEATH_MODE_LABELS)
 from src.waveforms import WAVEFORM_NAMES
 
 
@@ -52,6 +53,15 @@ class FeedbackSettingsEditor:
         self.threshold_box.pack(side="left")
         ttk.Label(threshold, text="%（0% 关闭此反馈）").pack(side="left", padx=5)
         ttk.Label(outer, text="低于此血量持续反馈；这是血量门槛，不是 A/B 输出强度。", wraplength=510 if compact else 730).pack(anchor="w", pady=4)
+        death = ttk.Frame(outer)
+        death.pack(fill="x", pady=(6, 0))
+        ttk.Label(death, text="死亡反馈模式：").pack(side="left", padx=5)
+        self.death_mode = tk.StringVar()
+        self.death_mode_box = ttk.Combobox(death, values=list(DEATH_MODE_LABELS),
+                                          textvariable=self.death_mode, state="readonly", width=28)
+        self.death_mode_box.pack(side="left")
+        ttk.Label(outer, text="挑战触发后复活仍持续；F8 重置并暂停，再按一次开始。异常仍停止输出。",
+                  wraplength=510 if compact else 730).pack(anchor="w", pady=4)
         limits = ttk.Frame(outer)
         limits.pack(fill="x", pady=12)
         for channel, suffix in (("A", ""), ("B", "_b")):
@@ -76,6 +86,8 @@ class FeedbackSettingsEditor:
 
     def fill(self, values, trigger_values=None, *, clean=False):
         self.threshold.set(str((trigger_values or default_trigger_settings())[THRESHOLD_KEY]))
+        selected = (trigger_values or default_trigger_settings()).get(DEATH_MODE_KEY, "pulse")
+        self.death_mode.set(next(label for label, mode in DEATH_MODE_LABELS.items() if mode == selected))
         self.mode.set(next(label for label, mode in self.mode_labels.items() if mode == values["channel_mode"]))
         for key, var in self.variables.items():
             var.set(WAVEFORM_NAMES[values[key]] if key.endswith("_waveform") else str(values[key]))
@@ -84,7 +96,8 @@ class FeedbackSettingsEditor:
             self.baseline = self.edit_snapshot()
 
     def edit_snapshot(self):
-        return (self.mode.get(), self.threshold.get(), tuple((key, var.get()) for key, var in self.variables.items()))
+        return (self.mode.get(), self.threshold.get(), self.death_mode.get(),
+                tuple((key, var.get()) for key, var in self.variables.items()))
 
     def is_dirty(self):
         return self.edit_snapshot() != self.baseline
@@ -97,6 +110,7 @@ class FeedbackSettingsEditor:
         mode = self.mode_labels[self.mode.get()]
         self.mode_box.configure(state="disabled" if running else "readonly")
         self.threshold_box.configure(state="disabled" if running else "normal")
+        self.death_mode_box.configure(state="disabled" if running else "readonly")
         for box in self.wave_boxes:
             box.configure(state="disabled" if running else "readonly")
         for ch, boxes in self.strength_boxes.items():
@@ -117,7 +131,8 @@ class FeedbackSettingsEditor:
             values = {key: self.wave_ids[var.get()] if key.endswith("_waveform") else var.get()
                       for key, var in self.variables.items()}
             values["channel_mode"] = self.mode_labels[self.mode.get()]
-            self.store.save(values, running=self.is_running(), trigger_settings={THRESHOLD_KEY: self.threshold.get()})
+            self.store.save(values, running=self.is_running(), trigger_settings={THRESHOLD_KEY: self.threshold.get(),
+                             DEATH_MODE_KEY: DEATH_MODE_LABELS[self.death_mode.get()]})
             self.on_saved()
             self.baseline = self.edit_snapshot()
             self.hint.set("已保存。下次连接生效，无需再次设置。")
@@ -132,8 +147,8 @@ class FeedbackSettingsDialog(FeedbackSettingsEditor):
     def __init__(self, parent, store, is_running, on_saved=lambda: None):
         window = tk.Toplevel(parent)
         window.title("反馈设置 · 波形 / A、B 强度")
-        window.geometry("820x590")
-        window.minsize(790, 570)
+        window.geometry("820x670")
+        window.minsize(790, 650)
         window.transient(parent)
         window.grab_set()
         from src.ui_theme import theme_window

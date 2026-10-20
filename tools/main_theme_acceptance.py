@@ -74,6 +74,10 @@ def run(launch_app, screenshot_dir=None):
                 assert app.settings_store.trigger_snapshot()['low_health_threshold_percent'] == 30
                 capture('hud_page')
                 view.hud_editor.selection.set('1.00')
+                view.hud_editor.scale_box.event_generate('<<ComboboxSelected>>')
+                settle()
+                assert '1080p 来源' in view.hud_editor.source.get()
+                assert not view.hud_editor.experimental.get()
                 view.hud_editor.save()
                 assert app.hud_store.snapshot()['scale_percent'] == 100
                 capture('hud_saved')

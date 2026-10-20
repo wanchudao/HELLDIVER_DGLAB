@@ -64,6 +64,8 @@ def ready(client, values=None):
     assert hello[0]["op"] == "hello" and hello[0]["manifest"] == manifest()
     receive(client, op="hello_ack", accepted=True, sdk_version="1.0")
     receive(client, op="config", data=values or settings())
+    if client.require_capture_binding:
+        client.bind_capture_geometry((1920, 1080))  # Injected fixture, not a real capture claim.
     receive(client, op="device_info", connected=True, device_type="v3",
             max_strength_a=200, max_strength_b=200)
     assert not client.armed and client.phase == "ready"

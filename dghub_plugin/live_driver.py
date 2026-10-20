@@ -48,6 +48,10 @@ class LiveDriver:
                 session.last_error = "Capture initialization timed out"
                 return [session.close("capture_initialization_timeout")]
             capture_status = "ok" if self.worker.ready.is_set() else "pending"
+            if capture_status == "ok" and session.capture_resolution is None:
+                batches.append(session.bind_capture_geometry(self.worker.monitor_size))
+                if session.closed:
+                    return batches
             if capture_status != self._last_capture_status:
                 self._last_capture_status = capture_status
                 batches.append(session._batch([{"op": "status", "fields": {
@@ -57,11 +61,11 @@ class LiveDriver:
             for action in self.ui.poll(session):
                 if action == "close":
                     return [session.close("panel_closed")]
-                if action == "toggle":
+                if action in ("toggle", "hotkey_toggle"):
                     if self.worker is None or not self.worker.ready.is_set():
                         batches.append(session.pause("waiting_capture"))
                     else:
-                        batches.append(session.set_running(not session.armed))
+                        batches.append(session.local_toggle("hotkey" if action == "hotkey_toggle" else "button"))
                 elif action == "hotkey_unavailable":
                     # Local shortcut failure must not leave an armed session
                     # running. The visible button remains an explicit fallback.

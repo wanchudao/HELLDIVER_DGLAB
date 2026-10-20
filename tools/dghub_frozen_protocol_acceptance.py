@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-async def run_case(exe, *, mode, scale, scenario, threshold=75):
+async def run_case(exe, *, mode, scale, scenario, threshold=75, resolution=(1920,1080)):
     import cv2
     import numpy as np
     from websockets.asyncio.server import serve
@@ -40,6 +40,9 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
         max_strength_b=19, injury_pulse_strength_b=30, low_health_strength_b=3,
         heal_pulse_strength_b=7, healing_sustain_strength_b=2, death_pulse_strength_b=28)
     values["low_health_threshold_percent"] = str(threshold)
+    values["allow_experimental_high_resolution"] = resolution != (1920,1080)
+    death_mode = {"death_until_revive": "until_revive", "death_until_reset": "until_reset"}.get(scenario, "pulse")
+    values["death_feedback_mode"] = death_mode
     if scenario == "wave_variants":
         values.update(low_health_preset=SOFTWARE_RANDOM_PRESET,
                       death_pulse_preset="software-long-cycle")
@@ -48,10 +51,10 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
                       death_pulse_preset=SOFTWARE_RANDOM_PRESET)
     resume_tasks = []
 
-    def local_control(running):
+    def local_control(running, source="button"):
         state["control_sequence"] = state.get("control_sequence", 0) + 1
         (root / "controls.json").write_text(json.dumps(dict(sequence=state["control_sequence"],
-            running=running)), encoding="utf-8")
+            running=running, source=source)), encoding="utf-8")
 
     async def resume(ws):
         await asyncio.sleep(.3)
@@ -98,6 +101,10 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
                 resume_tasks.append(asyncio.create_task(resume(ws)))
             if packet["op"] == "status":
                 fields = packet["fields"]
+                if scenario == "death_until_reset" and state.get("reset_requested") and fields.get("pause_reason") == "challenge_reset":
+                    state["reset_paused"] = fields.get("running") is False and fields.get("death_marked") is False
+                    await ws.send(json.dumps(dict(op="stop", reason="frozen_challenge_reset_verified")))
+                    continue
                 state["catalog_verified"] |= fields.get("preset_catalog", {}).get("state") == "verified_startup_snapshot"
                 state["capture_ready"] |= fields.get("capture_state") == "ok"
                 state["output_ready"] |= fields.get("output_ready") is True
@@ -119,20 +126,39 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
                 state["lost"] |= state["death"] and fields.get("display_status") == "NO HUD"
                 if state["lost"] and fields.get("hp") == 1 and not state["complete"]:
                     state["complete"] = True
-                    await ws.send(json.dumps(dict(op="stop", reason="frozen_software_acceptance")))
+                    if scenario == "death_until_reset":
+                        state["reset_requested"] = True
+                        local_control(False, "hotkey")
+                    else:
+                        await ws.send(json.dumps(dict(op="stop", reason="frozen_software_acceptance")))
 
     with tempfile.TemporaryDirectory(prefix="dghub-frozen-software-") as directory:
         root = Path(directory)
         (root / "manifest.json").write_text(json.dumps(manifest(), ensure_ascii=False), encoding="utf-8")
         frames = []
         sequence = [(1, 10), (.6, 20), (.9, 15), (.95, 55), (0, 10), (None, 4), (1, 8)]
+        if death_mode != "pulse":
+            sequence = [(1, 10), (.6, 20), (.9, 15), (.95, 55), (0, 165), (.6, 35), (None, 4), (1, 8)]
+        if resolution != (1920,1080):
+            # Repeated 4K PNG decoding is deliberately part of this replay, not
+            # a game capture benchmark. Keep the second healing rise inside
+            # the unchanged two-second healing episode. Fifteen decoded 4K
+            # frames can exceed that interval and instead start a *new*
+            # confirmation, correctly masking the soothing waveform again.
+            sequence[2:4] = [(.9, 5), (.95, 65)]
         if scenario == "threshold":
             # Let the higher-priority 2s injury pulse finish, so the low-health
             # waveform itself becomes observable without changing priorities.
             sequence.insert(2, (.2, 55))
         for index, (hp, count) in enumerate(sequence):
             name = f"frame_{index}.png"
-            frame = synthetic_frame(scale, hp) if hp is not None else np.zeros((1080, 1920, 3), np.uint8)
+            if hp is None:
+                frame = np.zeros((resolution[1], resolution[0], 3), np.uint8)
+            elif resolution == (1920,1080):
+                frame = synthetic_frame(scale, hp)
+            else:
+                from tools.resolution_fixtures import synthetic_frame as reference_frame
+                frame = reference_frame(scale, resolution, hp)
             if not cv2.imwrite(str(root / name), frame):
                 raise RuntimeError("Synthetic fixture creation failed")
             frames.extend([name] * count)
@@ -143,12 +169,17 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
                            if not key.startswith("DGHUB_") and key not in {"PYTHONHOME", "PYTHONPATH"}}
             environment.update(PATH="", DGHUB_HOST="127.0.0.1", DGHUB_PORT=str(server.sockets[0].getsockname()[1]),
                 DGHUB_TOKEN=token, DGHUB_PLUGIN_ID=manifest()["id"], DGHUB_PLUGIN_ROOT=str(root))
+            process_started_at = time.monotonic()
             process = await asyncio.create_subprocess_exec(str(exe), "--software-replay-test", str(root),
                 cwd=root, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             timed_out = False
             try:
-                code = await asyncio.wait_for(process.wait(), timeout=15)
+                # Over 300 high-resolution PNG decodes may exceed 45 seconds
+                # while *individual* frames still meet the unchanged runtime
+                # freshness deadline. Bound the complete replay separately.
+                timeout = 90 if resolution != (1920,1080) else 25 if death_mode != "pulse" else 15
+                code = await asyncio.wait_for(process.wait(), timeout=timeout)
             except TimeoutError:
                 timed_out = True
                 process.kill()
@@ -160,6 +191,7 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
                         task.cancel()
                 if resume_tasks:
                     await asyncio.gather(*resume_tasks, return_exceptions=True)
+            process_elapsed_seconds = round(time.monotonic()-process_started_at,3)
         snapshots = list((root / "sessions").glob("*/config_snapshot.json"))
         snapshot = json.loads(snapshots[0].read_text(encoding="utf-8")) if len(snapshots) == 1 else {}
         metadata = json.loads(snapshots[0].with_name("session.json").read_text(encoding="utf-8")) if snapshot else {}
@@ -176,7 +208,8 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
         and metadata.get("rows_dropped") == metadata.get("rows_invalid") == 0
         and metadata.get("rows_written") == len(rows)
         and snapshot.get("settings") == validate(values)
-        and snapshot.get("recognition_config", {}).get("ROI") == get_profile(scale)["roi"])
+        and snapshot.get("recognition_config", {}).get("ROI") == get_profile(scale,resolution)["roi"]
+        and snapshot.get("recognition_config", {}).get("hud") == get_profile(scale,resolution)["hud"])
     pause_ok = scenario != "pause" or (state["pause_stage"] == "resuming" and not state["paused_positive"])
     if scenario == "monitor_only":
         ok = (code == 0 and state["complete"] and record_ok and state.get("recognition_only_seen")
@@ -195,17 +228,47 @@ async def run_case(exe, *, mode, scale, scenario, threshold=75):
             ok &= audit["random_wave_windows"] > 0 and audit["long_full_cycle_requests"] > 0
     ok &= state["catalog_requests"] == 1 and state["catalog_verified"] and settling["startup_settling_verified"]
     threshold_observations = [r for r in rows if "frame" in r and .59 < r.get("raw_hp", -1) < .62]
+    healing_transitions = []
+    previous_raw = None
+    for row in rows:
+        current_raw = row.get("raw_hp")
+        if type(current_raw) in (int,float):
+            if previous_raw is not None and current_raw - previous_raw > .01:
+                healing_transitions.append({key:row.get(key) for key in
+                    ("frame","ts","raw_hp","action","healing_sustain")})
+            previous_raw = current_raw
     threshold_ok = (snapshot.get("recognition_config", {}).get("trigger", {}).get("low_health_hp_threshold") == threshold / 100)
     if scenario == "threshold":
         threshold_ok &= bool(threshold_observations) and all(r["low_health"] is (.6 < threshold / 100) for r in threshold_observations)
     ok &= threshold_ok
+    death_chain = True
+    if death_mode != "pulse":
+        confirmed = [r for r in rows if "frame" in r and r.get("reason") not in ("invalid_frame", "baseline")]
+        zero_rows = [r for r in confirmed if r.get("raw_hp") == 0]
+        alive_rows = [r for r in confirmed if .59 < r.get("raw_hp", -1) < .62
+                      and any(prior.get("raw_hp") == 0 for prior in rows[:rows.index(r)])]
+        death_chain = (len(zero_rows) >= 140 and all(r.get("death_marked") for r in zero_rows)
+            and alive_rows and all(r.get("death_marked") is (death_mode == "until_reset") for r in alive_rows)
+            and snapshot.get("recognition_config", {}).get("trigger", {}).get("death_feedback_mode") == death_mode)
+        if death_mode == "until_reset":
+            death_chain = bool(death_chain and state.get("reset_paused"))
+        ok &= bool(death_chain)
     return dict(status="ok" if ok else "incomplete", mode=mode, hud_scale_percent=scale, scenario=scenario,
-        exit_code=code, hard_timeout=timed_out, five_presets_observed=sorted(waves),
+        resolution=list(resolution), input_source="synthetic_original_pixels_not_gameplay",
+        exit_code=code, hard_timeout=timed_out,
+        process_elapsed_seconds=process_elapsed_seconds, process_hard_timeout_seconds=timeout,
+        five_presets_observed=sorted(waves),
         enabled_channels_correct=audit["enabled_channels_correct"],
         independent_caps_correct=audit["independent_caps_correct"], submission_audit=audit,
         final_both_zero=audit["final_both_zero"], pause_no_positive_after_ack=pause_ok,
         session_record_verified=record_ok, **settling,
         low_health_threshold_percent=threshold, threshold_chain_verified=threshold_ok,
+        death_feedback_mode=death_mode, death_chain_verified=bool(death_chain),
+        death_chain_observations=({"confirmed_zero_frames": len(zero_rows),
+            "marked_zero_frames": sum(bool(r.get("death_marked")) for r in zero_rows),
+            "alive_after_death_frames": len(alive_rows),
+            "alive_marked_frames": sum(bool(r.get("death_marked")) for r in alive_rows)} if death_mode != "pulse" else {}),
+        healing_transitions=healing_transitions,
         state=state, session_metadata=metadata, applied_snapshot=snapshot, messages=received,
         local_control_fixture=True, host_start_commands_used=False,
         native_host_tested=False, real_game_tested=False, physical_device_used=False)
@@ -342,7 +405,7 @@ async def run_normal_entry_case(exe):
         native_host_tested=False, real_game_tested=False, physical_device_used=False)
 
 
-async def run(bundle):
+async def run(bundle, *, resolution_cases=False):
     exe = (Path(bundle).resolve() / "helldiver_dglab.exe")
     if not exe.is_file():
         raise ValueError("Internal candidate EXE not found")
@@ -354,11 +417,22 @@ async def run(bundle):
         case = await run_case(exe, mode=mode, scale=scale, scenario=scenario)
         cases.append(case)
         print(json.dumps({key: case[key] for key in ("status", "mode", "hud_scale_percent", "scenario", "exit_code")}), flush=True)
+    for scenario in ("death_until_revive", "death_until_reset"):
+        case = await run_case(exe, mode="both", scale=100, scenario=scenario)
+        cases.append(case)
+        print(json.dumps({key: case[key] for key in ("status", "scenario", "death_chain_verified", "exit_code")}), flush=True)
     gates = []
     for threshold in (0, 30, 75):
         case = await run_case(exe, mode="both", scale=100, scenario="threshold", threshold=threshold)
         cases.append(case)
         print(json.dumps({key: case[key] for key in ("status", "scenario", "low_health_threshold_percent", "exit_code")}), flush=True)
+    if resolution_cases:
+        for resolution in ((2560,1440),(3840,2160)):
+            for mode, scale, scenario in (("a",75,"normal"),("b",125,"disconnect"),
+                    ("both",110,"pause"),("both",100,"death_until_revive"),("both",100,"death_until_reset")):
+                case = await run_case(exe, mode=mode, scale=scale, scenario=scenario,resolution=resolution)
+                cases.append(case)
+                print(json.dumps({key:case[key] for key in ("status","resolution","mode","scenario","exit_code")}),flush=True)
     for scenario in ("catalog_unavailable", "unknown_saved_preset"):
         gate = await run_catalog_gate_case(exe, scenario)
         gates.append(gate)
@@ -373,13 +447,58 @@ async def run(bundle):
         native_host_tested=False, real_game_tested=False, physical_device_used=False)
 
 
+async def retry_incomplete(bundle, previous):
+    """Preserve passed evidence from the identical EXE; retry only failed cases.
+
+    The resulting report carries the earlier report hash and original failure
+    summaries. This is explicitly a combined acceptance record, not a claim
+    that all cases passed in one uninterrupted run.
+    """
+    exe = Path(bundle).resolve() / "helldiver_dglab.exe"
+    earlier = json.loads(previous.read_text(encoding="utf-8"))
+    if (earlier.get("exe_sha256") != hashlib.sha256(exe.read_bytes()).hexdigest()
+            or earlier.get("normal_entry_case", {}).get("status") != "ok"
+            or not earlier.get("catalog_startup_gates")
+            or any(gate.get("status") != "ok" for gate in earlier["catalog_startup_gates"])):
+        raise ValueError("Retry requires the identical EXE and completed startup gates")
+    failures, reused = [], 0
+    for index, case in enumerate(earlier["cases"]):
+        if case.get("status") == "ok":
+            reused += 1
+            continue
+        if (case.get("resolution") not in ([2560,1440],[3840,2160])
+                or case.get("scenario") not in {"normal","disconnect","pause","death_until_revive","death_until_reset"}):
+            raise ValueError("Retry is limited to the known high-resolution acceptance cases")
+        failures.append({key:case.get(key) for key in
+                         ("status","mode","scenario","resolution","hard_timeout","exit_code")})
+        replacement = await run_case(exe, mode=case["mode"], scale=case["hud_scale_percent"],
+            scenario=case["scenario"], threshold=case["low_health_threshold_percent"],
+            resolution=tuple(case["resolution"]))
+        earlier["cases"][index] = replacement
+        print(json.dumps({key:replacement[key] for key in
+              ("status","mode","scenario","resolution","exit_code")}),flush=True)
+    if not failures:
+        raise ValueError("Previous report has no incomplete cases")
+    earlier["retry_evidence"] = dict(previous_report=previous.name,
+        previous_sha256=hashlib.sha256(previous.read_bytes()).hexdigest(),
+        original_incomplete_cases=failures, reused_passed_cases_same_exe=reused,
+        newly_executed_cases=len(failures), combined_record_not_single_run=True,
+        high_resolution_process_hard_timeout_seconds=90,
+        production_frame_timeout_modified=False)
+    earlier["status"] = "ok" if all(case["status"] == "ok" for case in earlier["cases"]) else "incomplete"
+    return earlier
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--resolution-cases", action="store_true")
+    parser.add_argument("--retry-incomplete-from", type=Path)
     args = parser.parse_args(argv)
     try:
-        report = asyncio.run(run(args.bundle))
+        report = asyncio.run(retry_incomplete(args.bundle,args.retry_incomplete_from)
+            if args.retry_incomplete_from else run(args.bundle,resolution_cases=args.resolution_cases))
     except Exception:
         report = dict(status="incomplete", scope="frozen software protocol; runner failed")
         args.report.parent.mkdir(parents=True, exist_ok=True)

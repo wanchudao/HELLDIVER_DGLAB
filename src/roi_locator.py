@@ -50,6 +50,8 @@ class RoiLocator:
         self.bar_min_x = roi["bar_min_x"]
         self.bar_max_x = roi["bar_max_x"]
         self.hud = config.get("hud")
+        from src.hud_profiles import pixel_units
+        self._unit = lambda pixels: pixel_units(config, pixels)
         if self.hud is not None:
             from src.hud_profiles import validate_hud_section
             validate_hud_section(self.hud, roi)
@@ -147,15 +149,16 @@ class RoiLocator:
         """
         hud = self.hud
         thickness = hud["cap_stem_width"]
-        top, bottom = hud["cap_top"] - 5, hud["cap_bottom"] + 5
-        start, stop = expected_x - 8, expected_x + 9
-        offset = thickness + 2
+        pad, radius = self._unit(5), self._unit(8)
+        top, bottom = hud["cap_top"] - pad, hud["cap_bottom"] + pad
+        start, stop = expected_x - radius, expected_x + radius + 1
+        offset = thickness + self._unit(2)
         patch = frame[top:bottom, start - offset:stop + offset].astype(np.float32)
         center = patch[:, offset:-offset]
         contrast = np.minimum(center - patch[:, :-2 * offset],
                               center - patch[:, 2 * offset:]).max(axis=2)
-        upper = contrast[5: max(6, hud["slot_y1"] - top - 1)]
-        lower = contrast[min(len(contrast) - 6, hud["slot_y2"] - top + 1): -5]
+        upper = contrast[pad: max(pad + 1, hud["slot_y1"] - top - self._unit(1))]
+        lower = contrast[min(len(contrast) - pad - 1, hud["slot_y2"] - top + self._unit(1)): -pad]
         scores = np.minimum(upper.mean(axis=0), lower.mean(axis=0))
         maximum = float(scores.max())
         if maximum < self.min_structure_contrast:
@@ -163,7 +166,7 @@ class RoiLocator:
         runs = self._runs(scores >= max(self.min_structure_contrast, maximum * .65))
         # Thin JPEG noise cannot be a second stem; two substantial structures
         # in this bounded region are ambiguous and must be rejected.
-        candidates = [(a, b) for a, b in runs if b - a >= max(2, thickness - 2)]
+        candidates = [(a, b) for a, b in runs if b - a >= max(self._unit(2), thickness - self._unit(2))]
         if len(candidates) != 1:
             return None, "hud_cap_ambiguous"
         first, last = candidates[0]
@@ -174,16 +177,16 @@ class RoiLocator:
         line = contrast[:, column]
         threshold = max(self.min_structure_contrast, float(line.max()) * .30)
         upper_runs = [(a, b) for a, b in self._runs(line[:hud["slot_y1"] - top] > threshold)
-                      if b - a >= 2]
+                      if b - a >= self._unit(2)]
         lower_start = hud["slot_y2"] - top
         lower_runs = [(a + lower_start, b + lower_start)
-                      for a, b in self._runs(line[lower_start:] > threshold) if b - a >= 2]
+                      for a, b in self._runs(line[lower_start:] > threshold) if b - a >= self._unit(2)]
         if len(upper_runs) != 1 or len(lower_runs) != 1:
             return None, "hud_cap_ambiguous"
         cap_top = top + upper_runs[0][0]
         cap_bottom = top + lower_runs[0][1]
         center_y = math.floor((cap_top + cap_bottom - 1) / 2 + .5)
-        if cap_bottom - cap_top < hud["cap_bottom"] - hud["cap_top"] - 4:
+        if cap_bottom - cap_top < hud["cap_bottom"] - hud["cap_top"] - self._unit(4):
             return None, "hud_cap_missing"
         return (center_x, center_y, maximum), ""
 

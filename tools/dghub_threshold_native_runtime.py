@@ -19,7 +19,11 @@ import time
 import traceback
 import zipfile
 
-ROOT = Path("E:/HELLDIVER_DGLAB/build/dghub_threshold_native_host_20261010").resolve()
+PROJECT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("HELLDIVER_NATIVE_RUNTIME_ROOT",
+            PROJECT / "build/dghub_threshold_native_host_20261010")).resolve()
+if not ROOT.is_relative_to((PROJECT / "build").resolve()) or ROOT == (PROJECT / "build").resolve():
+    raise ValueError("Native runtime must stay in an owned build directory")
 KEY = "low_health_threshold_percent"
 ID = "helldiver_dglab"
 
@@ -61,7 +65,7 @@ async def run():
     with zipfile.ZipFile(archive) as zf:
         manifest = json.loads(zf.read("manifest.json"))
         exe_hash = hashlib.sha256(zf.read(manifest["entry"])).hexdigest()
-    assert manifest["id"] == ID and manifest["version"] == "1.0.5"
+    assert manifest["id"] == ID and manifest["version"] in ("1.0.5", "1.0.6", "1.0.7")
     fields = {f["key"]: f for s in manifest["config_schema"] for f in s["fields"]}
     assert fields[KEY]["type"] == "number" and fields[KEY]["min"] == 0 and fields[KEY]["max"] == 100
     fixture = Path(tempfile.mkdtemp(prefix="native_runtime_", dir=ROOT))
@@ -86,6 +90,18 @@ async def run():
             assert reloaded.get_plugin_config(ID)[KEY] == setting
         roundtrips.append(value)
     config.update_plugin_batch(ID, {KEY: "75", "hud_scale_percent": "100", "panel_mode": "full"})
+    death_roundtrips = []
+    if manifest["version"] in {"1.0.6","1.0.7"}:
+        for mode in ("pulse", "until_revive", "until_reset"):
+            config.update_plugin_batch(ID, {"death_feedback_mode": mode})
+            assert ConfigManager(config_path=str(config_path)).get_plugin_config(ID)["death_feedback_mode"] == mode
+            death_roundtrips.append(mode)
+        config.update_plugin_batch(ID, {"death_feedback_mode": "until_reset", "panel_mode": "live"})
+    experimental = manifest['version']=='1.0.7'
+    if experimental:
+        for enabled in (True,False):
+            config.update_plugin_batch(ID, {'allow_experimental_high_resolution':enabled})
+            assert ConfigManager(config_path=str(config_path)).get_plugin_config(ID)['allow_experimental_high_resolution'] is enabled
     before, before_bytes = config.get_plugin_config(ID), config_path.read_bytes()
     original_save = config._save
     config._save = lambda: (_ for _ in ()).throw(OSError("controlled save failure"))
@@ -152,18 +168,38 @@ async def run():
             if server_task.done():
                 await server_task
             await asyncio.sleep(.02)
+        import ctypes
+        dll_buffer = ctypes.create_unicode_buffer(32768)
+        ctypes.windll.kernel32.GetDllDirectoryW(len(dll_buffer), dll_buffer)
+        write("launch_progress.json", dict(stage="before_native_spawn", inherited_dll_directory=dll_buffer.value,
+            runtime_environment_keys=[key for key in os.environ if key.startswith(("_PYI", "_MEIPASS", "PYTHON", "TCL", "TK"))]))
         assert await manager.start_plugin(ID)
         await ready(75)
+        if death_roundtrips:
+            assert applied_latest()["death_feedback_mode"] == "until_reset" and applied_latest()["panel_mode"] == "live"
+        if experimental:
+            assert applied_latest()['allow_experimental_high_resolution'] is False
         checks.append(dict(stage="first_native_start", applied=75, paused=not applied_latest().get("running")))
         # Actual host storage update + actual live SDK configuration message.
         config.update_plugin_batch(ID, {KEY: "30"})
         adapter = manager._active[ID]
         await adapter.runtime.push_config_changed(KEY, "30")
+        if experimental:
+            config.update_plugin_batch(ID, {'allow_experimental_high_resolution':True})
+            await adapter.runtime.push_config_changed('allow_experimental_high_resolution',True)
+        if death_roundtrips:
+            config.update_plugin_batch(ID, {"death_feedback_mode": "pulse", "panel_mode": "full"})
+            await adapter.runtime.push_config_changed("death_feedback_mode", "pulse")
+            await adapter.runtime.push_config_changed("panel_mode", "full")
         end = time.monotonic() + 3
         while time.monotonic() < end and not any(p.get("fields", {}).get("settings_pending") is True for p in received):
             await asyncio.sleep(.03)
         assert any(p.get("fields", {}).get("settings_pending") is True for p in received)
         assert applied_latest()[KEY] == 75
+        if experimental:
+            assert applied_latest()['allow_experimental_high_resolution'] is False
+        if death_roundtrips:
+            assert applied_latest()["death_feedback_mode"] == "until_reset" and applied_latest()["panel_mode"] == "live"
         checks.append(dict(stage="native_saved_pending", saved=30, applied=75))
         write("runtime_progress.json", dict(stage="ready_for_local_controls", fixture=str(fixture),
             native_route=True, applied=75, pending=30, output_disconnected=True))
@@ -180,6 +216,10 @@ async def run():
         received.clear()
         assert await manager.start_plugin(ID)
         await ready(30)
+        if experimental:
+            assert applied_latest()['allow_experimental_high_resolution'] is True
+        if death_roundtrips:
+            assert applied_latest()["death_feedback_mode"] == "pulse" and applied_latest()["panel_mode"] == "full"
         checks.append(dict(stage="native_reenable", applied=30, paused=not applied_latest().get("running")))
         await manager.stop_plugin(ID)
         await asyncio.sleep(.3)
@@ -191,6 +231,8 @@ async def run():
             exe_sha256=exe_hash, host_exe_sha256=hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
             archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(), checks=checks,
             threshold_roundtrips=roundtrips, integer_and_canonical_string_saved=True,
+            death_mode_roundtrips=death_roundtrips, live_mode_pending_and_reenable_verified=bool(death_roundtrips),
+            experimental_resolution_pending_and_reenable_verified=experimental,
             save_failure_preserved_memory_and_file=True, native_route_tested=True,
             actual_plugin_process_started=True, pending_kept_old_applied=True,
             reenable_applied_new_threshold=True, session_snapshot_thresholds=[75, 30],

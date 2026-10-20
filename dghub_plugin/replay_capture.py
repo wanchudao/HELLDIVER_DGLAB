@@ -33,7 +33,9 @@ class ReplayCapture:
                 raise ValueError("Invalid software replay image")
             self.paths.append(path)
         self.monitor_index = monitor_index
-        self.monitor_size = (1920, 1080)
+        from src.hud_profiles import validate_resolution
+        with Image.open(self.paths[0]) as header:
+            self.monitor_size = validate_resolution(header.size)
         self.is_ready = True
         self.index = 0
         self.closed = False
@@ -46,9 +48,9 @@ class ReplayCapture:
             raise ValueError("Software replay image changed size")
         with Image.open(path) as header:
             if header.size != self.monitor_size:
-                raise ValueError("Software replay is restricted to original 1080p frames")
+                raise ValueError("Software replay frame size changed within the session")
         frame = cv2.imdecode(np.frombuffer(path.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
-        if frame is None or frame.shape != (1080, 1920, 3):
+        if frame is None or frame.shape != (self.monitor_size[1], self.monitor_size[0], 3):
             raise ValueError("Invalid software replay frame")
         self.index += 1
         return frame
@@ -85,13 +87,16 @@ class ReplayControls:
             data = json.loads(raw)
         except (OSError, json.JSONDecodeError):
             return []  # A fixture writer may be between its two small writes.
-        if (not isinstance(data, dict) or set(data) != {"sequence", "running"}
+        if (not isinstance(data, dict) or not {"sequence", "running"}.issubset(data)
+                or set(data) - {"sequence", "running", "source"}
                 or type(data["sequence"]) is not int or data["sequence"] < 1
-                or type(data["running"]) is not bool):
+                or type(data["running"]) is not bool or data.get("source", "button") not in ("button", "hotkey")):
             raise ValueError("Invalid replay-only local control")
         if data["sequence"] <= self.sequence:
             return []
         self.sequence = data["sequence"]
+        if data.get("source") == "hotkey":
+            return ["hotkey_toggle"]
         return ["toggle"] if data["running"] != session.armed else []
 
     def close(self):

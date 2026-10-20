@@ -15,7 +15,7 @@ class DesktopView:
         self.animation = tk.BooleanVar(value=self.preferences.animation)
         self.current = '任务控制'
         self.status_reader = None
-        self.root.title('HELLDIVER / DGLAB · 独立主版本')
+        self.root.title('HELLDIVER / DGLAB · 独立主版本 v1.0.0 Beta 3')
         width, height = responsive_size(1280, 820, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
         self.root.geometry(f'{width}x{height}')
         self.root.minsize(min(860, width), min(560, height))
@@ -238,8 +238,15 @@ class DesktopView:
             return
         hp = f"{record['hp']:.0%}" if record['valid'] and not record['paused'] else '--'
         status = '暂停' if record['paused'] else '运行' if record['valid'] else 'NO HUD'
+        if record.get('death_marked'):
+            status += (' / 挑战已触发：F8 重置并暂停' if record.get('death_feedback_mode') == 'until_reset'
+                       else ' / 死亡持续至复活')
         if record['mode'] == 'dglab' and not record['connected']:
             status = 'APP 未连接 / 输出未确认'
+        if record.get('resolution'):
+            status += ' / ' + record['resolution']
+        if record.get('hud_source') == 'resolution_extrapolated':
+            status += ' 推算·未实机验收'
         values = record['strengths']
         self.output_status.set(f"软件输出 A {values['A'] if values['A'] is not None else '--'} / B {values['B'] if values['B'] is not None else '--'}   |   HP {hp}   |   {status}")
 

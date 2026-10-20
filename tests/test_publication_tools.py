@@ -43,3 +43,58 @@ def test_secret_scan_only_reports_locations():
     result = locations(('example\n'+value).encode(), 'fixture.txt')
     assert result == [{'file':'fixture.txt','line':2,'kind':'github_token'}]
     assert value not in json.dumps(result)
+
+
+def test_public_source_includes_current_guides_without_private_artifacts():
+    from tools.publication_manifest import source_files
+
+    files = set(source_files())
+    assert {
+        'docs/resolution_acceptance_20261017.md',
+        'docs/resolution_testing_20261017.md',
+        'docs/postgame_retest_20261018.md',
+        'docs/death_live_acceptance_20261014.md',
+        'docs/death_live_testing_20261014.md',
+        'docs/releases/main-v1.0.0-beta.3.md',
+        'docs/releases/dghub-v1.0.7.md',
+    } <= files
+    assert not any(Path(name).parts[0] in {'build', 'release', 'debug', 'sessions'}
+                   or Path(name).name in {'config.ini', 'feedback_settings.ini',
+                                          'hud_settings.ini', 'ui_settings.ini'}
+                   for name in files)
+
+
+def test_source_commit_preserves_parent_files_and_normal_index(tmp_path, monkeypatch):
+    import subprocess
+    from tools import create_publication_commit as commit_tool
+
+    project = tmp_path / 'project'
+    project.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(['git', '-c', 'safe.directory=' + project.as_posix(),
+                                        *args], cwd=project)
+
+    git('init')
+    git('config', 'user.name', 'Publication Test')
+    git('config', 'user.email', 'publication@example.invalid')
+    (project / 'README.md').write_text('old\n', encoding='utf-8')
+    (project / 'unrelated.txt').write_text('preserve this remote file\n', encoding='utf-8')
+    git('add', 'README.md', 'unrelated.txt')
+    git('commit', '-m', 'parent')
+    parent = git('rev-parse', 'HEAD').decode().strip()
+    (project / 'README.md').write_text('new release\n', encoding='utf-8')
+    original_index = (project / '.git/index').read_bytes()
+    monkeypatch.setattr(commit_tool, 'ROOT', project)
+    monkeypatch.setattr(commit_tool, 'source_files', lambda: ['README.md'])
+
+    report = commit_tool.create(parent, 'codex/publication-test', project / 'build/publication',
+                                message='release: two new test packages', preserve_parent=True)
+
+    assert report['tracked_artifacts_removed'] == 0 and report['parent_files_preserved']
+    assert git('show', report['commit'] + ':unrelated.txt') == b'preserve this remote file\n'
+    assert git('show', report['commit'] + ':README.md') == b'new release\n'
+    assert git('log', '-1', '--format=%s', report['commit']).decode().strip() == 'release: two new test packages'
+    assert git('rev-parse', 'HEAD').decode().strip() == parent
+    assert (project / '.git/index').read_bytes() == original_index
+    assert (project / 'README.md').read_text(encoding='utf-8') == 'new release\n'

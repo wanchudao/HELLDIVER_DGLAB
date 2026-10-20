@@ -19,7 +19,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 from typing import Callable
-from src.feedback_mixer import MockFeedbackSender
+from src.feedback_mixer import MockFeedbackSender, validate_death_mode
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +133,11 @@ class TriggerDispatch:
         self._low_health_thresh = float(trigger_cfg.get(
             "low_health_hp_threshold", LOW_HEALTH_HP_THRESH))
         self._max_frame_gap = float(trigger_cfg.get("max_frame_gap_sec", 1.0))
+        self.death_feedback_mode = validate_death_mode(trigger_cfg.get("death_feedback_mode", "pulse"))
+        # Logical session memory survives output resets; only F8/new session
+        # clears a failed challenge. It never bypasses the fresh-frame lease.
+        self.death_marked = False
+        self._death_layer_active = False
         timing = [*self._cooldowns.values(), self._injury_window, self._max_frame_gap,
                   self._healing_sustain]
         thresholds = [self._death_hp_thresh, self._injury_delta_thresh,
@@ -271,12 +276,17 @@ class TriggerDispatch:
         if hp <= self._death_hp_thresh:
             if previous_hp > self._death_hp_thresh and not self._death_latched:
                 candidates.append(("death_pulse", 0.0))
+                if self.death_feedback_mode != "pulse":
+                    self.death_marked = True
+                    self._stop_output()  # new death clears old injury/healing layers once
             self._death_latched = True
             self._clear_injury()
             self._healing_until = -math.inf
             self._healing_confirmation_armed = True
             reason = "death_latched"
         else:
+            if self.death_feedback_mode == "until_revive":
+                self.death_marked = False
             self._death_latched = False  # 已重新观察到有效的正血量生命。
             if previous_hp - hp > self._injury_delta_thresh:
                 # 受伤后再次回血是新的治疗确认，但不打断当前舒缓持续层。
@@ -312,8 +322,10 @@ class TriggerDispatch:
         # 连续层每有效帧续租；sender 超时自动停层，避免抓屏阻塞时无限输出。
         # 更新为空层并不取消正在播放的死亡脉冲，stop_output 才清全部层。
         try:
-            continuous = self._update_continuous(
-                low_health=low_health, healing=healing, hp=hp)
+            values = dict(low_health=low_health, healing=healing, hp=hp)
+            if self.death_feedback_mode != "pulse":
+                values["death_active"] = self.death_marked
+            continuous = self._update_continuous(**values)
             continuous_ok = (isinstance(continuous, dict)
                              and continuous.get("dispatched") is True)
         except Exception:
@@ -322,6 +334,7 @@ class TriggerDispatch:
         if not continuous_ok:
             self.reset("continuous_rejected")
             return self._record(hp, stable_hp, state, reason="continuous_rejected")
+        self._death_layer_active = bool(values.get("death_active", False))
         if self._continuous_state != (low_health, healing):
             logger.info("trigger: continuous  low_health=%s  healing=%s",
                         low_health, healing)
@@ -338,7 +351,8 @@ class TriggerDispatch:
                     payload["damage_pct"] = round(damage, 6)
                 dispatched = False
                 try:
-                    sent = self._send(action, payload)
+                    sent = (continuous if action == "death_pulse" and self.death_feedback_mode != "pulse"
+                            else self._send(action, payload))
                     dispatched = isinstance(sent, dict) and sent.get("dispatched") is True
                     reason = "sent" if dispatched else "sender_rejected"
                 except Exception:
@@ -373,10 +387,25 @@ class TriggerDispatch:
             "damage_pct": round(damage, 6),
             "low_health": self._continuous_state[0],
             "healing_sustain": self._continuous_state[1],
+            **self.death_status(),
         })
         return {"dispatched": dispatched, "action": action or "none", "actions": actions,
                 "reason": reason, "low_health": self._continuous_state[0],
                 "healing_sustain": self._continuous_state[1]}
+
+    @property
+    def challenge_failed(self):
+        return self.death_feedback_mode == "until_reset" and self.death_marked
+
+    def death_status(self):
+        return {"death_feedback_mode": self.death_feedback_mode, "death_marked": self.death_marked,
+                "death_layer_active": bool(self._death_layer_active and self._last_frame_time is not None
+                    and 0 <= self._clock() - self._last_frame_time < self._max_frame_gap)}
+
+    def reset_challenge(self):
+        """Explicit F8 reset; caller also pauses and invalidates frame tickets."""
+        self.death_marked = False
+        self.reset("challenge_reset")
 
     def mock_output(self) -> dict:
         """只读 Mock 合成快照；不导入设备发送器、不生成任何协议消息。"""
@@ -402,6 +431,7 @@ class TriggerDispatch:
         self._healing_until = -math.inf
         self._healing_confirmation_armed = True
         self._continuous_state = (False, False)
+        self._death_layer_active = False
         if not self._closed:
             try:
                 self._stop_output()
@@ -414,6 +444,7 @@ class TriggerDispatch:
         if self._closed:
             return
         self._closed = True
+        self.death_marked = False
         self.reset("session_end")
         try:
             self._close_sender()

@@ -280,7 +280,7 @@ def test_hidden_panel_uses_queued_short_press_and_initial_poll_keeps_it(client, 
     monkeypatch.setattr(cv2, "imshow", lambda *args: pytest.fail("Hidden panel rendered"))
     assert key.starts == 1 and key.discards == 1
     key.pending = True
-    assert ui.poll(client) == ["toggle"]
+    assert ui.poll(client) == ["hotkey_toggle"]
     assert ui.poll(client) == []
     assert ui.hotkey_status() == {"hotkey_ready": True, "hotkey_diagnostic": ""}
 
@@ -299,7 +299,7 @@ def test_queued_f8_and_mouse_click_produce_one_intent(client, tmp_path):
     ui, key = setup_panel(client, tmp_path)
     ui.poll(client)
     key.pending = ui.controller._toggle_requested = True
-    assert ui.poll(client) == ["toggle"]
+    assert ui.poll(client) == ["hotkey_toggle"]
     assert ui.poll(client) == []
 
 

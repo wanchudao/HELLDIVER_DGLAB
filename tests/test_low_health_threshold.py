@@ -16,12 +16,16 @@ from test_dghub_sdk import client, frame, messages, output, ready, receive, sett
 KEY = "low_health_threshold_percent"
 
 
+def expected_trigger(percent):
+    return {KEY: percent, "death_feedback_mode": "pulse"}
+
+
 @pytest.mark.parametrize("percent", range(101))
 def test_all_percentages_persist_and_reach_main_trigger(tmp_path, percent):
     store = preferences.SettingsStore(tmp_path / "feedback_settings.ini")
     store.save(store.values, trigger_settings={KEY: percent})
     restored = preferences.SettingsStore(store.path)
-    assert restored.trigger_snapshot() == {KEY: percent}
+    assert restored.trigger_snapshot() == expected_trigger(percent)
     assert KEY not in restored.snapshot()
     path = make_config(tmp_path / "session.ini", 1, (1920, 1080), "mock",
                        feedback_settings=restored.snapshot(), trigger_settings=restored.trigger_snapshot())
@@ -49,7 +53,7 @@ def test_invalid_threshold_keeps_file_and_memory(tmp_path, bad):
     previous = store.path.read_bytes()
     with pytest.raises(ValueError):
         store.save(store.values, trigger_settings={KEY: bad})
-    assert store.path.read_bytes() == previous and store.trigger_snapshot() == {KEY: 30}
+    assert store.path.read_bytes() == previous and store.trigger_snapshot() == expected_trigger(30)
     with pytest.raises(ValueError):
         validate({KEY: bad})
 
@@ -59,7 +63,7 @@ def test_old_sender_file_and_old_generator_keep_behavior(tmp_path):
     path.write_text("[sender]\nchannel_mode=b\nlow_health_strength=42\n", encoding="utf-8")
     before = path.read_bytes()
     store = preferences.SettingsStore(path)
-    assert store.trigger_snapshot() == {KEY: 75}
+    assert store.trigger_snapshot() == expected_trigger(75)
     assert store.snapshot()["low_health_strength"] == 42 and path.read_bytes() == before
     session = make_config(tmp_path / "old.ini", 1, (1920, 1080), "mock")
     assert load_config(session)["trigger"]["low_health_hp_threshold"] == .75
@@ -74,9 +78,9 @@ def test_sender_only_save_retains_threshold_and_snapshot_is_detached(tmp_path):
     store.save(store.values | {"low_health_strength_b": 55})
     preferences.save_settings(store.path, store.values | {"channel_mode": "both"})
     restored = preferences.SettingsStore(store.path)
-    assert restored.trigger_snapshot() == {KEY: 0}
+    assert restored.trigger_snapshot() == expected_trigger(0)
     assert restored.values["low_health_strength_b"] == 55
-    assert preferences.default_trigger_settings() == {KEY: 75}
+    assert preferences.default_trigger_settings() == expected_trigger(75)
 
 
 def test_atomic_failure_and_running_lock_preserve_both_sections(tmp_path, monkeypatch):
@@ -90,7 +94,7 @@ def test_atomic_failure_and_running_lock_preserve_both_sections(tmp_path, monkey
     monkeypatch.setattr(preferences.os, "replace", fail)
     with pytest.raises(OSError):
         store.save(store.values | {"channel_mode": "both"}, trigger_settings={KEY: 75})
-    assert store.path.read_bytes() == before and store.trigger_snapshot() == {KEY: 30}
+    assert store.path.read_bytes() == before and store.trigger_snapshot() == expected_trigger(30)
     assert store.snapshot()["channel_mode"] == "a"
     assert not list(tmp_path.glob(".feedback-*.tmp"))
 
@@ -104,7 +108,7 @@ def test_corrupt_trigger_section_blocks_both_snapshots_and_recovers(tmp_path, se
         with pytest.raises(ValueError):
             snapshot()
     store.save(preferences.default_settings(), trigger_settings={KEY: 75})
-    assert not store.error and store.trigger_snapshot() == {KEY: 75}
+    assert not store.error and store.trigger_snapshot() == expected_trigger(75)
 
 
 @pytest.mark.parametrize("percent", [0, 1, 30, 75, 100])
@@ -197,6 +201,7 @@ def test_threshold_control_depends_on_session_not_channel(mode, running):
     dialog.save_button, dialog.default_button = widget("save"), widget("default")
     dialog.store = SimpleNamespace(error="")
     dialog.hint = SimpleNamespace(set=lambda value: None)
+    dialog.death_mode_box = widget("death_mode")
     dialog.update_enabled()
     assert states["threshold"]["state"] == ("disabled" if running else "normal")
 
@@ -206,4 +211,4 @@ def test_dghub_schema_field_is_number_under_low_health():
     field = next(f for f in section["fields"] if f["key"] == KEY)
     assert {k: field[k] for k in ("type", "min", "max", "step", "default")} == {
         "type": "number", "min": 0, "max": 100, "step": 1, "default": 75}
-    assert manifest()["version"] == "1.0.5"
+    assert manifest()["version"] == "1.0.7"

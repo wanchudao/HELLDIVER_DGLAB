@@ -43,12 +43,12 @@ def test_hidden_panel_f8_works_without_allocating_window(client, tmp_path, monke
     ui.configure(defaults() | {"panel_mode": "hidden"})
     assert ui.poll(client) == []
     key[0] = True
-    assert ui.poll(client) == ["toggle"]
+    assert ui.poll(client) == ["hotkey_toggle"]
     assert ui.poll(client) == []
     key[0] = False
     assert ui.poll(client) == []
     key[0] = True
-    assert ui.poll(client) == ["toggle"]
+    assert ui.poll(client) == ["hotkey_toggle"]
 
 
 def test_popup_child_has_no_host_credentials_and_is_not_launched_twice(tmp_path, monkeypatch):

@@ -35,10 +35,8 @@ def test_malformed_or_escaping_replay_rejected(tmp_path, data):
 
 
 def test_wrong_original_size_is_not_secretly_rescaled(tmp_path):
-    replay = ReplayCapture(fixture(tmp_path, size=(1079, 1919)))
-    with pytest.raises(ValueError, match="1080p"):
-        replay.grab()
-    assert replay.index == 0
+    with pytest.raises(ValueError):
+        ReplayCapture(fixture(tmp_path, size=(1079, 1919)))
 
 
 def test_missing_or_oversized_manifest_fails_before_input(tmp_path):
